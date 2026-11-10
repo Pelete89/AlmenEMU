@@ -6,6 +6,8 @@ gestión de biblioteca, opciones del core, audio, mandos y savestates.
 
 > Estado: **MVP funcional**. Funciona con el renderer software del core. El siguiente
 > paso es implementar el render hardware (OpenGL 4.3 / Vulkan 1.1) para rendimiento real.
+>
+> Plan completo, backlog y criterios de release: [`docs/PLAN.md`](docs/PLAN.md).
 
 ![AlmenEMU](docs/screenshot.png)
 
