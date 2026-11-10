@@ -1,10 +1,10 @@
 # Plan de implementación de AlmenEMU
 
-> **Versión del plan:** 1.1  
-> **Fecha:** 2026-11-10  
-> **Estado:** vivo; se actualiza al cerrar cada hito.  
-> **Revisión 1.1:** coherencia de hitos/releases, arquitectura macOS y backlog ampliado.  
-> **Licencia del proyecto:** GPL-3.0-or-later.  
+> **Versión del plan:** 1.2
+> **Fecha:** 2026-11-10
+> **Estado:** vivo; se actualiza al cerrar cada hito.
+> **Revisión 1.2:** M2 (OpenGL 4.3) implementado y verificado en Windows; Linux pendiente de CI.
+> **Licencia del proyecto:** GPL-3.0-or-later.
 > **Documento relacionado:** [`docs/ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ---
@@ -95,7 +95,8 @@ estimaciones de este documento son indicativas, no compromisos de fecha.
 | Ventana y UI base | Completo | SDL3 + Dear ImGui, tema oscuro, menús, panel lateral |
 | Carga de core | Completo | `LibretroCore` con `SDL_LoadObject` y resolución de símbolos |
 | Host libretro | Completo | `LibretroHost`: environment, vídeo, audio, input, opciones |
-| Vídeo software | Completo | XRGB8888, RGB565 y 0RGB1555 → textura SDL3 |
+| Vídeo software | Completo | XRGB8888, RGB565 y 0RGB1555 → textura OpenGL |
+| Render hardware OpenGL | Completo en Windows | FBO propio, `SET_HW_RENDER`, `context_reset`, 60 fps core/UI |
 | Audio | Completo | `SDL_AudioStream`, S16 estéreo, cola limitada a ~500 ms |
 | Input | Completo (base) | Teclado + SDL_Gamepad, RetroPad, ejes analógicos |
 | Opciones del core | Completo (base) | `SET_VARIABLES`, V1, V2 e INTl; combos en UI |
@@ -104,7 +105,7 @@ estimaciones de este documento son indicativas, no compromisos de fecha.
 | Recientes | Completo | `config/recent.txt`, máx. 12 |
 | Diálogos y drag & drop | Completo | SDL3 file dialog + `SDL_EVENT_DROP_FILE` |
 | Documentación | Completo (base) | README, ARCHITECTURE, PLAN, CHANGELOG, THIRD_PARTY_NOTICES |
-| Verificación funcional | Completo en Windows | Azahar 2126.2 + Universal-Updater 3.4.1 `.3dsx`; Linux/macOS pendientes |
+| Verificación funcional | Completo en Windows | Azahar 2126.2 + Universal-Updater 3.4.1 `.3dsx`; OpenGL 4.3 hardware; Linux/macOS pendientes |
 
 ### 3.2 Hitos cerrados
 
@@ -129,10 +130,26 @@ estimaciones de este documento son indicativas, no compromisos de fecha.
 - [x] Captura de pantalla.
 - [x] UI de bienvenida, recientes e información del core.
 
+#### M2 — Render hardware OpenGL 4.3 (completado en Windows)
+
+- [x] Interfaz `VideoBackend` y `OpenGLBackend`.
+- [x] Contexto OpenGL 4.3 core con fallback 4.1/3.3.
+- [x] FBO propio y `get_current_framebuffer`.
+- [x] `SET_HW_RENDER`, `get_proc_address`, `context_reset` tras `retro_load_game`.
+- [x] Presentación del FBO con UVs correctas para `bottom_left_origin`.
+- [x] Fallback software y opción `--software`.
+- [x] Captura desde FBO en modo hardware.
+- [x] Medición de FPS real de core y UI.
+- [x] Verificado en Windows: 60 fps de core y 60 Hz de UI con Universal-Updater.
+- [ ] Verificación en Linux (pendiente de CI/VM).
+
 ### 3.3 Limitaciones conocidas del MVP
 
-- Solo render **software**: la UI puede bajar de 60 Hz porque el core consume CPU.
+- macOS sigue en render software hasta M3 (Vulkan/MoltenVK).
+- Linux está implementado pero pendiente de verificación en CI/VM.
 - El touchscreen y el C-Stick no están mapeados por completo.
+- Vsync está desactivado; el frame limiter usa `SDL_DelayPrecise`.
+- No hay shaders ni escalado entero configurables.
 - No hay persistencia de opciones del core ni configuración por juego.
 - No hay biblioteca con carátulas/metadatos.
 - No hay empaquetado, CI ni releases.
@@ -152,8 +169,8 @@ estimaciones de este documento son indicativas, no compromisos de fecha.
 
 ### 4.1 Brechas principales
 
-1. **Render hardware**: es la brecha funcional más importante. Sin OpenGL/Vulkan, el
-   rendimiento no es representativo y la UI compite con el render software.
+1. **Render hardware**: OpenGL 4.3 ya está implementado en Windows. Falta verificar
+   Linux y añadir Vulkan/MoltenVK en macOS.
 2. **macOS**: OpenGL 4.3 no existe en macOS; hay que implementar Vulkan/MoltenVK o
    aceptar software. Además, Dynarmic exige entitlement JIT y notarización.
 3. **Persistencia**: opciones del core, configuración por juego, perfiles de mando y
@@ -261,7 +278,11 @@ Puntos críticos:
 - M6 puede empezar en paralelo después de M2; el empaquetado completo espera a M3/M5.
 - M7 cierra cuando M2–M6 están estables.
 
-### M2 — Render hardware OpenGL 4.3 (Windows/Linux) · P0
+### M2 — Render hardware OpenGL 4.3 (Windows/Linux) · P0 · Completado en Windows
+
+> **Estado:** implementado y verificado en Windows (AMD 780M): 60 fps de core y 60 Hz
+> de UI. Linux pendiente de compilación/CI. El detalle técnico está en
+> [`docs/ARCHITECTURE.md`](ARCHITECTURE.md).
 
 **Objetivo:** sustituir el render software por OpenGL 4.3 en Windows/Linux.
 
@@ -269,12 +290,13 @@ Entregables:
 
 - Interfaz `VideoBackend` y selección automática de backend.
 - Contexto OpenGL 4.3 core con SDL3.
-- Implementación de `SET_HW_RENDER`, `context_reset`, `context_destroy`,
-  `get_current_framebuffer` y `get_proc_address`.
+- Implementación de `SET_HW_RENDER`, `context_reset`, `get_current_framebuffer` y
+  `get_proc_address`. `context_destroy` no se invoca al cambiar de juego; el contexto
+  OpenGL vive mientras la app y se destruye al cerrar.
 - Presentación del FBO de Azahar con el layout que elija el core.
 - Fallback a software si OpenGL no está disponible.
 - Onboarding mínimo: seleccionar core, aviso legal y abrir ROM.
-- Prueba con homebrew y al menos un juego comercial propio.
+- Prueba con homebrew; falta validar un juego comercial propio.
 - Documentación de limitaciones.
 
 **Criterio de aceptación:** un juego 3DS corre a velocidad completa con render hardware
@@ -385,6 +407,9 @@ la documentación permite compilar y usar la app sin ayuda externa.
 
 > Estado: **Pendiente** salvo que se indique lo contrario. Los identificadores son
 > estables para referenciarlos en issues y commits.
+>
+> **Completado en M2:** V-01, V-02, C-01, V-04 (fallback), V-07 (base) y V-08 (base).
+> Linux y macOS siguen pendientes de verificación.
 
 ### 7.1 Vídeo
 
@@ -829,12 +854,17 @@ corre a velocidad completa y la UI no se degrada; el fallback software sigue ope
 |---|---|---|
 | Build CMake/MSVC | ✅ | Windows 11, MSVC 2022, CMake 3.31 |
 | Carga de Azahar 2126.2 | ✅ | Windows x64 |
-| Boot de Universal-Updater 3.4.1 `.3dsx` | ✅ | Render software |
+| Boot de Universal-Updater 3.4.1 `.3dsx` | ✅ | Render hardware OpenGL 4.3 |
 | Audio init | ✅ | SDL3, 32.768 Hz |
-| Savestate `F5` | ✅ | ~3,7 MB generado; restauración pendiente de validar |
-| Captura `F12` | ✅ | BMP |
+| Savestate `F5`/`F9` | ✅ | Guardado y restaurado en hardware |
+| Captura `F12` | ✅ | BMP desde FBO (400x480) |
 | Linux/macOS | ⏳ | Pendiente de CI/VM |
-| Render hardware | ⏳ | M2/M3 |
+| Render hardware OpenGL 4.3 | ✅ | Windows, AMD Radeon 780M; core 60 fps / UI 60 Hz |
+| Fallback `--software` | ✅ | Windows; core ~44 fps / UI ~11 Hz |
+| Savestate carga | ✅ | Windows, hardware; estado restaurado |
+| Captura FBO hardware | ✅ | Windows; BMP 400x480 correcto |
+| Linux | ⏳ | Pendiente de CI/VM |
+| Vulkan/macOS | ⏳ | M3 |
 
 ---
 
@@ -849,3 +879,4 @@ los gates de release y el backlog; los cambios se registran en `CHANGELOG.md`.*
 |---|---|---|
 | 1.0 | 2026-11-10 | Plan inicial: alcance, estado, hitos, backlog, riesgos y Git. |
 | 1.1 | 2026-11-10 | Revisión completa: gates de release alineados con hitos; matriz de plataformas/core; core universal macOS; dependencias entre hitos; onboarding mínimo; tareas de pin/hash, savestate atómico, SBOM, accesibilidad de CI y documentación; decisiones abiertas (ADR). |
+| 1.2 | 2026-11-10 | M2 implementado: backend OpenGL 4.3, FBO, fallback software, `--software`, captura FBO, frame pacing y verificación en Windows. Linux/macOS pendientes. |

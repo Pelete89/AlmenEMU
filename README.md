@@ -4,8 +4,9 @@ Frontend de escritorio para emular **Nintendo 3DS** en Windows, Linux y macOS.
 Usa como motor el core **libretro de Azahar** (GPL-3.0) y añade una interfaz propia,
 gestión de biblioteca, opciones del core, audio, mandos y savestates.
 
-> Estado: **MVP funcional**. Funciona con el renderer software del core. El siguiente
-> paso es implementar el render hardware (OpenGL 4.3 / Vulkan 1.1) para rendimiento real.
+> Estado: **M2 implementado**. Render hardware **OpenGL 4.3** en Windows/Linux
+> (verificado en Windows) y fallback software. macOS seguirá usando software hasta M3
+> (Vulkan + MoltenVK).
 >
 > Plan completo, backlog y criterios de release: [`docs/PLAN.md`](docs/PLAN.md).
 
@@ -16,7 +17,8 @@ gestión de biblioteca, opciones del core, audio, mandos y savestates.
 ## Qué incluye
 
 - Carga dinámica de cualquier core libretro; por defecto busca `azahar_libretro`.
-- Render software con conversión a `XRGB8888`, escalado y pantalla dual.
+- Render hardware OpenGL 4.3 con FBO propio y fallback software.
+- Presentación OpenGL 3.3+ para la UI (ImGui).
 - Audio S16 estéreo con cola y limitación de latencia.
 - Teclado y mandos SDL3 (layout Nintendo).
 - Opciones del core expuestas en la UI (`SET_CORE_OPTIONS_V2`).
@@ -31,6 +33,7 @@ gestión de biblioteca, opciones del core, audio, mandos y savestates.
 - Compilador con C++20 (MSVC 2022, GCC 12+, Clang 15+).
 - Git y conexión a internet la primera vez (CMake descarga SDL3 e ImGui).
 - Python 3 opcional, para descargar el core.
+- GPU con **OpenGL 3.3+** para la interfaz; **OpenGL 4.3** para el render hardware.
 - El core **Azahar libretro** para tu plataforma.
 
 ### Dependencias en Linux (Debian/Ubuntu)
@@ -95,6 +98,13 @@ El core también se puede seleccionar desde **Archivo → Seleccionar core...** 
 ./AlmenEMU --core cores/azahar_libretro.so /ruta/juego.3ds
 ```
 
+Para forzar el renderer software del core (útil para diagnosticar o en GPUs sin
+OpenGL 4.3):
+
+```bash
+./AlmenEMU --software --core cores/azahar_libretro.so /ruta/juego.3ds
+```
+
 ## Uso
 
 1. Abre **Archivo → Abrir ROM...** o arrastra un `.3ds`, `.cci`, `.cxi`, `.app`, `.cia`
@@ -126,9 +136,11 @@ El stick izquierdo es el Circle Pad y el derecho el C-Stick.
 
 ```text
 src/
-  app/Application.*      ventana, UI, input, biblioteca, hotkeys
+  app/Application.*      ventana, contexto OpenGL, UI, input, hotkeys
   core/LibretroCore.*    carga dinámica del .dll/.so/.dylib
   core/LibretroHost.*    callbacks libretro, vídeo, audio, opciones
+  video/VideoBackend.h   interfaz de presentación
+  video/OpenGLBackend.*  FBO, texturas, contexto hardware y fallback software
   main.cpp
 third_party/libretro/    cabecera MIT de libretro
 cores/                   cores locales (ignorados por git)
@@ -141,7 +153,7 @@ docs/                    capturas y documentación
 - [x] Carga de core y ROM.
 - [x] Render software, audio, teclado, mando, savestates y capturas.
 - [x] Opciones del core y lista de recientes.
-- [ ] Render hardware OpenGL 4.3 en Windows/Linux.
+- [x] Render hardware OpenGL 4.3 en Windows/Linux (verificado en Windows; Linux pendiente de CI).
 - [ ] Render Vulkan 1.1 + MoltenVK en macOS.
 - [ ] Touchscreen y C-Stick completos.
 - [ ] Configuración por juego y perfiles de mandos.
@@ -153,11 +165,16 @@ docs/                    capturas y documentación
 
 ## Notas técnicas
 
-- El core de Azahar **no es un framebuffer simple**: en modo hardware usa
-  `RETRO_ENVIRONMENT_SET_HW_RENDER` y espera que el frontend cree el contexto y llame a
-  `context_reset`. Este MVP fuerza `citra_graphics_api=Software`.
+- El core de Azahar usa `RETRO_ENVIRONMENT_SET_HW_RENDER`. El frontend crea el contexto,
+  entrega un FBO propio mediante `get_current_framebuffer`, llama a `context_reset` tras
+  `retro_load_game` y presenta el FBO con ImGui. El renderer software sube el framebuffer
+  del core a una textura.
+- El contexto de UI pide OpenGL 4.3, con fallback a 4.1/3.3. Si no hay 4.3, el core se
+  fuerza a `Software`.
+- Vsync está desactivado y el bucle se limita a ~60 Hz con `SDL_DelayPrecise`; así se
+  evita la caída a 30 Hz cuando un frame de core+UI roza el intervalo de refresco.
 - En macOS no se puede usar OpenGL 4.3 (el máximo es 4.1). Para hardware hay que usar
-  Vulkan con MoltenVK, o quedarse con software.
+  Vulkan con MoltenVK, o quedarse con software (M3).
 - Los cores de release de Azahar para Windows/Linux son x86_64. En Linux ARM64 hay que
   compilar Azahar desde fuente con `-DENABLE_LIBRETRO=ON`.
 

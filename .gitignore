@@ -23,3 +23,14 @@
 Thumbs.db
 *.user
 *.suo
+
+# Local diagnostic captures
+/hw*.txt
+/sw*.txt
+/ui*.txt
+/fps*.txt
+/final-*.txt
+/ui-debug.bmp
+/hw-*.bmp
+/hw-*.png
+/desktop-test*.png
