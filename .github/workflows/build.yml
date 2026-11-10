@@ -1,0 +1,77 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            os: ubuntu-24.04
+            preset: linux
+            artifact: build/AlmenEMU
+            artifact_name: AlmenEMU-linux-x86_64
+            run_cmd: ./build/AlmenEMU --help
+          - name: Windows x86_64
+            os: windows-2022
+            preset: windows
+            artifact: build/Release/AlmenEMU.exe
+            artifact_name: AlmenEMU-windows-x86_64
+            run_cmd: ./build/Release/AlmenEMU.exe --help
+          - name: macOS arm64
+            os: macos-14
+            preset: macos
+            artifact: build/AlmenEMU
+            artifact_name: AlmenEMU-macos-arm64
+            run_cmd: ./build/AlmenEMU --help
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config \
+            libasound2-dev libpulse-dev libudev-dev libdbus-1-dev \
+            libx11-dev libxext-dev libxinerama-dev libxrandr-dev libxi-dev \
+            libxcursor-dev libxfixes-dev libxss-dev \
+            libwayland-dev wayland-protocols libdecor-0-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev \
+            libgl1-mesa-dev libglx-dev libegl1-mesa-dev libgles2-mesa-dev \
+            libvulkan-dev
+
+      - name: Install Ninja on macOS
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }} --parallel
+
+      - name: Smoke test (--help)
+        shell: bash
+        run: ${{ matrix.run_cmd }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact }}
+          if-no-files-found: error

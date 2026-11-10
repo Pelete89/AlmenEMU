@@ -34,3 +34,6 @@ Thumbs.db
 /hw-*.bmp
 /hw-*.png
 /desktop-test*.png
+
+# Local GitHub CLI device-flow logs
+gh-auth-refresh.*
