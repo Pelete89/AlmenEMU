@@ -1,0 +1,25 @@
+# Build output
+/build/
+/out/
+/.vs/
+/CMakeUserPresets.json
+
+# Local libretro cores (do not commit binaries)
+/cores/*
+!/cores/.gitkeep
+
+# Test ROMs / homebrew
+/test-homebrew/
+
+# Local logs and screenshots
+/run-*.txt
+/game-*.txt
+/state-*.txt
+/ui-screenshot*.png
+/game-screenshot.png
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.user
+*.suo
