@@ -72,9 +72,9 @@ estimaciones de este documento son indicativas, no compromisos de fecha.
 | Plataforma | Arquitectura | Core Azahar | Estado |
 |---|---|---|---|
 | Windows 10/11 | x86_64 | `azahar-libretro-windows-x86_64` | Soportado |
-| Windows 10/11 | ARM64 | No hay asset oficial x86_64; emulación x64 o compilar desde fuente | P2 / documentar |
+| Windows 10/11 | ARM64 | No hay asset oficial ARM64; usar el core x86_64 bajo emulación x64 o compilar desde fuente | P2 / documentar |
 | Linux | x86_64 | `azahar-libretro-linux-x86_64` | Soportado |
-| Linux | ARM64 | Compilar Azahar con `-DENABLE_LIBRETRO=ON` | P1 (Steam Deck/ARM) |
+| Linux | ARM64 | Compilar Azahar con `-DENABLE_LIBRETRO=ON` | P1 (equipos ARM64; Steam Deck es x86_64) |
 | macOS | Apple Silicon | `azahar-libretro-macos-arm64` | Soportado |
 | macOS | Intel | `azahar-libretro-macos-x86_64` | Soportado |
 | macOS | Universal | Requiere `lipo` de ambos slices o cargar el correcto en runtime | P0 para app universal |
@@ -396,10 +396,11 @@ la documentación permite compilar y usar la app sin ayuda externa.
 | V-04 | P1 | Fallback y diagnóstico | Si falla HW, se usa software con aviso claro | 2 d |
 | V-05 | P1 | Escalado entero y filtros | Presets nearest/linear/integer; sin artefactos | 2 d |
 | V-06 | P2 | Shaders post-proceso | Pipeline de shaders seleccionable; sin afectar al core | 4 d |
-| V-07 | P1 | Capturas HW | Readback del FBO a BMP/PNG sin bloquear el juego | 1 d |
+| V-07 | P1 | Readback HW | Leer el FBO a memoria sin bloquear; base para capturas | 1 d |
 | V-08 | P1 | Frame pacing | Sin stutter con 59,826 Hz; vsync configurable | 2 d |
 | V-09 | P2 | Capturas PNG | Convertir el framebuffer a PNG sin bloquear | 1 d |
 | V-10 | P2 | Diagnóstico GPU | Vendor/renderer/versión visibles en logs y UI | 1 d |
+| V-11 | P1 | Sincronización A/V | Audio y vídeo sin desfase; dynamic rate control | 2 d |
 
 ### 7.2 Core y ciclo de vida
 
@@ -444,6 +445,7 @@ la documentación permite compilar y usar la app sin ayuda externa.
 | U-07 | P1 | Toasts y logs | Errores no bloqueantes + visor de logs | 1 d |
 | U-08 | P2 | Accesibilidad | Navegación por teclado; contraste; escala | 2 d |
 | U-09 | P1 | Recuperación de errores | Modo seguro si falla config/core; opción de reset | 1 d |
+| U-10 | P1 | Hotkeys configurables | Remapeo de pausa, reset, estados y captura | 1 d |
 
 ### 7.5 Datos y configuración
 
@@ -472,6 +474,7 @@ la documentación permite compilar y usar la app sin ayuda externa.
 | P-10 | P1 | Integración de escritorio | Asociación de archivos y single-instance | 1 d |
 | P-11 | P0 | Fuente, checksums y SBOM | Tarball de fuente y hashes en cada release | 1 d |
 | P-12 | P1 | Política Windows ARM64 | Documentar soporte x64 emulado o compilar core | 0,5 d |
+| P-13 | P2 | Firma Windows | Certificado de código; reducir avisos SmartScreen | 1 d |
 
 ### 7.7 Calidad
 
@@ -488,6 +491,7 @@ la documentación permite compilar y usar la app sin ayuda externa.
 | Q-09 | P1 | Auditoría de licencias | Headers SPDX y SBOM en CI | 1 d |
 | Q-10 | P2 | Actualización de dependencias | Dependabot/Renovate con pin y revisión | 0,5 d |
 | Q-11 | P1 | Límites de CI gráfica | CI usa software/mock; matriz HW es manual | 0,5 d |
+| Q-12 | P1 | Tests de migración | Config y savestates antiguos migran sin pérdida | 1 d |
 
 ### 7.8 Legal y documentación
 
