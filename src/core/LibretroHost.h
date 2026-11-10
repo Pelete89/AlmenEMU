@@ -12,6 +12,7 @@
 #include "libretro.h"
 
 class LibretroCore;
+class VideoBackend;
 struct SDL_AudioStream;
 
 struct CoreOptionValue {
@@ -50,17 +51,17 @@ public:
     bool SaveState(const std::filesystem::path& path, std::string& error);
     bool LoadState(const std::filesystem::path& path, std::string& error);
 
+    void SetVideoBackend(VideoBackend* video) { video_ = video; }
+    void SetHardwareEnabled(bool enabled) { hardware_enabled_ = enabled; }
+    bool IsHardwareActive() const { return hardware_active_; }
+
     bool IsInitialized() const { return initialized_; }
     bool IsGameLoaded() const { return game_loaded_; }
     bool IsPaused() const { return paused_; }
     void SetPaused(bool paused) { paused_ = paused; }
     bool ShouldQuit() const { return quit_; }
 
-    // Video. The framebuffer is always converted to XRGB8888.
-    bool ConsumeVideoFrame();
-    const uint32_t* Pixels() const { return video_buffer_.data(); }
-    int VideoWidth() const { return video_width_; }
-    int VideoHeight() const { return video_height_; }
+    // Video metadata. The actual frame lives in the VideoBackend.
     double AspectRatio() const;
     double Fps() const { return target_fps_; }
 
@@ -100,7 +101,7 @@ private:
                    const std::string& description, const std::string& category,
                    const std::string& default_value,
                    std::vector<CoreOptionValue> values);
-    void ForceSoftwareRendering();
+    void ConfigureGraphicsApi();
     void OpenAudio();
     void CloseAudio();
     void QueueAudio(const int16_t* data, size_t frames);
@@ -115,8 +116,12 @@ private:
     bool paused_ = false;
     bool quit_ = false;
     bool hw_render_requested_ = false;
+    bool hardware_enabled_ = false;
+    bool hardware_active_ = false;
     bool variables_dirty_ = false;
     bool audio_error_logged_ = false;
+
+    VideoBackend* video_ = nullptr;
 
     std::filesystem::path system_dir_;
     std::filesystem::path save_dir_;
@@ -130,10 +135,6 @@ private:
     double target_fps_ = 60.0;
 
     retro_pixel_format pixel_format_ = RETRO_PIXEL_FORMAT_XRGB8888;
-    std::vector<uint32_t> video_buffer_;
-    int video_width_ = 0;
-    int video_height_ = 0;
-    bool video_dirty_ = false;
 
     std::array<bool, 16> buttons_{};
     std::array<std::array<int16_t, 2>, 2> analog_{};

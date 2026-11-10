@@ -2,6 +2,7 @@
 #include "core/LibretroHost.h"
 
 #include "core/LibretroCore.h"
+#include "video/VideoBackend.h"
 
 #include <SDL3/SDL_audio.h>
 #include <SDL3/SDL_log.h>
@@ -11,7 +12,6 @@
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
-#include <cstring>
 #include <fstream>
 #include <sstream>
 #include <utility>
@@ -25,13 +25,6 @@ std::string Trim(std::string value) {
     return value;
 }
 
-uint32_t Expand5(uint32_t value) {
-    return (value << 3) | (value >> 2);
-}
-
-uint32_t Expand6(uint32_t value) {
-    return (value << 2) | (value >> 4);
-}
 
 } // namespace
 
@@ -76,6 +69,7 @@ bool LibretroHost::Initialize(LibretroCore& core, const std::filesystem::path& s
     options_.clear();
     categories_.clear();
     hw_render_requested_ = false;
+    hardware_active_ = false;
     variables_dirty_ = false;
     quit_ = false;
 
@@ -122,10 +116,8 @@ void LibretroHost::Shutdown() {
     game_loaded_ = false;
     paused_ = false;
     hw_render_requested_ = false;
-    video_buffer_.clear();
-    video_width_ = 0;
-    video_height_ = 0;
-    video_dirty_ = false;
+    hardware_active_ = false;
+    video_ = nullptr;
     options_.clear();
     categories_.clear();
 }
@@ -139,7 +131,7 @@ bool LibretroHost::LoadGame(const std::filesystem::path& path, std::string& erro
         UnloadGame();
     }
 
-    ForceSoftwareRendering();
+    ConfigureGraphicsApi();
 
     const std::string path_utf8 = PathToUtf8(path);
     retro_game_info info{};
@@ -157,8 +149,8 @@ bool LibretroHost::LoadGame(const std::filesystem::path& path, std::string& erro
             error += "\n" + last_message_;
         }
         if (hw_render_requested_) {
-            error += "\nEl core pidió render hardware (OpenGL/Vulkan). Este frontend todavía "
-                     "solo implementa el renderer software.";
+            error += "\nEl core pidió render hardware, pero el backend no pudo inicializarlo. "
+                     "Prueba con --software.";
         }
         return false;
     }
@@ -166,13 +158,30 @@ bool LibretroHost::LoadGame(const std::filesystem::path& path, std::string& erro
     game_loaded_ = true;
     paused_ = false;
     quit_ = false;
-    video_buffer_.clear();
-    video_dirty_ = false;
 
     core_->retro_get_system_av_info(&av_info_);
     target_fps_ = av_info_.timing.fps > 1.0 ? av_info_.timing.fps : 60.0;
-    video_width_ = av_info_.geometry.base_width > 0 ? static_cast<int>(av_info_.geometry.base_width) : 400;
-    video_height_ = av_info_.geometry.base_height > 0 ? static_cast<int>(av_info_.geometry.base_height) : 480;
+
+    const unsigned base_width = av_info_.geometry.base_width > 0
+                                    ? av_info_.geometry.base_width : 400;
+    const unsigned base_height = av_info_.geometry.base_height > 0
+                                     ? av_info_.geometry.base_height : 480;
+    if (video_ != nullptr) {
+        video_->ResizeFramebuffer(base_width, base_height);
+    }
+
+    if (hw_render_requested_) {
+        if (video_ == nullptr || !video_->ContextReset(error)) {
+            if (error.empty()) {
+                error = "No hay backend de vídeo para el render hardware.";
+            }
+            UnloadGame();
+            return false;
+        }
+        hardware_active_ = video_->IsHardware();
+    } else {
+        hardware_active_ = false;
+    }
 
     OpenAudio();
 
@@ -180,8 +189,9 @@ bool LibretroHost::LoadGame(const std::filesystem::path& path, std::string& erro
         core_->retro_set_controller_port_device(0, RETRO_DEVICE_JOYPAD);
     }
 
-    AddLog("Juego cargado. Resolución base: " + std::to_string(video_width_) + "x" +
-           std::to_string(video_height_) + ", " + std::to_string(target_fps_) + " fps");
+    AddLog("Juego cargado. Resolución base: " + std::to_string(base_width) + "x" +
+           std::to_string(base_height) + ", " + std::to_string(target_fps_) + " fps, render: " +
+           (video_ != nullptr ? video_->Name() : "sin backend"));
     return true;
 }
 
@@ -191,10 +201,8 @@ void LibretroHost::UnloadGame() {
     }
     game_loaded_ = false;
     paused_ = false;
-    video_buffer_.clear();
-    video_width_ = 0;
-    video_height_ = 0;
-    video_dirty_ = false;
+    hw_render_requested_ = false;
+    hardware_active_ = false;
     CloseAudio();
 }
 
@@ -279,18 +287,13 @@ bool LibretroHost::LoadState(const std::filesystem::path& path, std::string& err
     return true;
 }
 
-bool LibretroHost::ConsumeVideoFrame() {
-    const bool dirty = video_dirty_;
-    video_dirty_ = false;
-    return dirty;
-}
-
 double LibretroHost::AspectRatio() const {
+    if (video_ != nullptr && video_->FrameWidth() > 0 && video_->FrameHeight() > 0) {
+        return static_cast<double>(video_->FrameWidth()) /
+               static_cast<double>(video_->FrameHeight());
+    }
     if (av_info_.geometry.aspect_ratio > 0.01) {
         return av_info_.geometry.aspect_ratio;
-    }
-    if (video_width_ > 0 && video_height_ > 0) {
-        return static_cast<double>(video_width_) / static_cast<double>(video_height_);
     }
     return 4.0 / 3.0;
 }
@@ -309,6 +312,11 @@ void LibretroHost::SetAxis(unsigned index, int16_t x, int16_t y) {
 }
 
 void LibretroHost::SetOption(const std::string& key, const std::string& value) {
+    if (key == "citra_graphics_api" && game_loaded_) {
+        AddLog("Cambiar la API gráfica requiere reiniciar el juego.");
+        return;
+    }
+
     auto it = options_.find(key);
     if (it == options_.end()) {
         return;
@@ -391,17 +399,33 @@ bool LibretroHost::HandleEnvironment(unsigned cmd, void* data) {
         return false;
     }
 
-    case RETRO_ENVIRONMENT_SET_HW_RENDER:
+    case RETRO_ENVIRONMENT_SET_HW_RENDER: {
         hw_render_requested_ = true;
-        AddLog("El core solicitó render hardware. Este frontend usa el renderer software.");
-        return false;
+        if (video_ == nullptr) {
+            AddLog("El core pidió render hardware, pero no hay backend de vídeo.");
+            return false;
+        }
+        std::string hw_error;
+        if (!video_->SetupHardwareRender(static_cast<retro_hw_render_callback*>(data),
+                                         hw_error)) {
+            AddLog("Render hardware no disponible: " + hw_error);
+            return false;
+        }
+        AddLog("Core solicitó render hardware OpenGL.");
+        return true;
+    }
     case RETRO_ENVIRONMENT_SET_HW_SHARED_CONTEXT:
+        return false;
     case RETRO_ENVIRONMENT_SET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE:
         return false;
     case RETRO_ENVIRONMENT_GET_PREFERRED_HW_RENDER: {
         auto* type = static_cast<retro_hw_context_type*>(data);
+        if (video_ != nullptr && video_->SupportsHardware()) {
+            *type = RETRO_HW_CONTEXT_OPENGL_CORE;
+            return true;
+        }
         *type = RETRO_HW_CONTEXT_NONE;
-        return true;
+        return false;
     }
 
     case RETRO_ENVIRONMENT_SET_VARIABLES:
@@ -455,13 +479,32 @@ bool LibretroHost::HandleEnvironment(unsigned cmd, void* data) {
     case RETRO_ENVIRONMENT_SET_SERIALIZATION_QUIRKS:
         return true;
 
-    case RETRO_ENVIRONMENT_SET_GEOMETRY:
+    case RETRO_ENVIRONMENT_SET_GEOMETRY: {
         av_info_.geometry = *static_cast<const retro_game_geometry*>(data);
+        if (video_ != nullptr) {
+            const unsigned width = av_info_.geometry.base_width > 0
+                                       ? av_info_.geometry.base_width
+                                       : av_info_.geometry.max_width;
+            const unsigned height = av_info_.geometry.base_height > 0
+                                        ? av_info_.geometry.base_height
+                                        : av_info_.geometry.max_height;
+            video_->ResizeFramebuffer(width, height);
+        }
         return true;
+    }
     case RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO: {
         av_info_ = *static_cast<const retro_system_av_info*>(data);
         if (av_info_.timing.fps > 1.0) {
             target_fps_ = av_info_.timing.fps;
+        }
+        if (video_ != nullptr) {
+            const unsigned width = av_info_.geometry.base_width > 0
+                                       ? av_info_.geometry.base_width
+                                       : av_info_.geometry.max_width;
+            const unsigned height = av_info_.geometry.base_height > 0
+                                        ? av_info_.geometry.base_height
+                                        : av_info_.geometry.max_height;
+            video_->ResizeFramebuffer(width, height);
         }
         return true;
     }
@@ -522,62 +565,24 @@ void LibretroHost::VideoCallback(const void* data, unsigned width, unsigned heig
     if (s_active == nullptr) {
         return;
     }
-    if (data == RETRO_HW_FRAME_BUFFER_VALID) {
-        s_active->hw_render_requested_ = true;
-        return;
-    }
-    if (data == nullptr || width == 0 || height == 0) {
-        return;
-    }
 
     LibretroHost& self = *s_active;
-    self.video_buffer_.resize(static_cast<size_t>(width) * height);
-    self.video_width_ = static_cast<int>(width);
-    self.video_height_ = static_cast<int>(height);
-
-    const auto* source = static_cast<const uint8_t*>(data);
-    const size_t source_pitch = pitch != 0 ? pitch : static_cast<size_t>(width) * 4;
-
-    switch (self.pixel_format_) {
-    case RETRO_PIXEL_FORMAT_XRGB8888: {
-        const size_t row_bytes = std::min(source_pitch, static_cast<size_t>(width) * 4);
-        for (unsigned y = 0; y < height; ++y) {
-            std::memcpy(self.video_buffer_.data() + static_cast<size_t>(y) * width,
-                        source + static_cast<size_t>(y) * source_pitch, row_bytes);
-        }
-        break;
-    }
-    case RETRO_PIXEL_FORMAT_RGB565: {
-        for (unsigned y = 0; y < height; ++y) {
-            const auto* row = reinterpret_cast<const uint16_t*>(source + y * source_pitch);
-            for (unsigned x = 0; x < width; ++x) {
-                const uint16_t pixel = row[x];
-                const uint32_t r = Expand5((pixel >> 11) & 0x1F);
-                const uint32_t g = Expand6((pixel >> 5) & 0x3F);
-                const uint32_t b = Expand5(pixel & 0x1F);
-                self.video_buffer_[static_cast<size_t>(y) * width + x] = (r << 16) | (g << 8) | b;
-            }
-        }
-        break;
-    }
-    case RETRO_PIXEL_FORMAT_0RGB1555: {
-        for (unsigned y = 0; y < height; ++y) {
-            const auto* row = reinterpret_cast<const uint16_t*>(source + y * source_pitch);
-            for (unsigned x = 0; x < width; ++x) {
-                const uint16_t pixel = row[x];
-                const uint32_t r = Expand5((pixel >> 10) & 0x1F);
-                const uint32_t g = Expand5((pixel >> 5) & 0x1F);
-                const uint32_t b = Expand5(pixel & 0x1F);
-                self.video_buffer_[static_cast<size_t>(y) * width + x] = (r << 16) | (g << 8) | b;
-            }
-        }
-        break;
-    }
-    default:
-        break;
+    if (self.video_ == nullptr) {
+        return;
     }
 
-    self.video_dirty_ = true;
+    if (data == RETRO_HW_FRAME_BUFFER_VALID) {
+        self.hardware_active_ = true;
+        self.video_->OnHardwareFrame(width, height);
+        return;
+    }
+
+    if (data == nullptr) {
+        return;
+    }
+
+    self.hardware_active_ = false;
+    self.video_->OnSoftwareFrame(data, width, height, pitch, self.pixel_format_);
 }
 
 void LibretroHost::AudioSampleCallback(int16_t left, int16_t right) {
@@ -784,20 +789,30 @@ void LibretroHost::AddOption(const std::string& key, const std::string& label,
     }
 }
 
-void LibretroHost::ForceSoftwareRendering() {
+void LibretroHost::ConfigureGraphicsApi() {
     const auto it = options_.find("citra_graphics_api");
     if (it == options_.end()) {
+        AddLog("El core no expone citra_graphics_api; se usará su valor por defecto.");
         return;
     }
 
-    const bool has_software =
-        std::any_of(it->second.values.begin(), it->second.values.end(),
-                    [](const CoreOptionValue& value) { return value.value == "Software"; });
+    const bool wants_hardware = hardware_enabled_ && video_ != nullptr &&
+                                video_->SupportsHardware();
+    std::string desired = wants_hardware ? "OpenGL" : "Software";
+    const auto has_value = [&](const std::string& value) {
+        return std::any_of(it->second.values.begin(), it->second.values.end(),
+                           [&](const CoreOptionValue& option) { return option.value == value; });
+    };
 
-    if (has_software && it->second.current != "Software") {
-        it->second.current = "Software";
+    if (!has_value(desired)) {
+        AddLog("El core no ofrece '" + desired + "'; se usará Software.");
+        desired = "Software";
+    }
+    if (it->second.current != desired && has_value(desired)) {
+        it->second.current = desired;
         variables_dirty_ = true;
-        AddLog("Renderer forzado a Software (el render hardware aún no está implementado).");
+        AddLog("Graphics API: " + desired +
+               (desired == "OpenGL" ? " (hardware)" : " (software)"));
     }
 
     const auto touch = options_.find("citra_enable_mouse_touchscreen");

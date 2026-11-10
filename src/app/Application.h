@@ -6,12 +6,14 @@
 #include <array>
 #include <chrono>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
 #include "core/LibretroCore.h"
 #include "core/LibretroHost.h"
+#include "video/VideoBackend.h"
 
 class Application {
 public:
@@ -25,6 +27,7 @@ public:
 
 private:
     bool Init();
+    bool CreateWindowAndContext(std::string& error);
     void Shutdown();
     void MainLoop();
 
@@ -43,7 +46,6 @@ private:
     void DrawErrorPopup();
     void DrawAboutPopup();
 
-    void UpdateTexture();
     void LoadCore(const std::filesystem::path& path);
     void LoadGame(const std::filesystem::path& path);
     void UnloadGame();
@@ -70,14 +72,17 @@ private:
     static std::string PathToUtf8(const std::filesystem::path& path);
 
     SDL_Window* window_ = nullptr;
-    SDL_Renderer* renderer_ = nullptr;
-    SDL_Texture* game_texture_ = nullptr;
+    SDL_GLContext gl_context_ = nullptr;
     SDL_Gamepad* gamepad_ = nullptr;
+    std::unique_ptr<VideoBackend> video_;
 
     bool running_ = true;
     bool imgui_ready_ = false;
     bool fullscreen_ = false;
     bool core_loaded_ = false;
+    bool hardware_supported_ = false;
+    bool hardware_enabled_ = true;
+    bool force_software_ = false;
     bool show_side_panel_ = true;
     bool show_log_ = false;
     bool show_about_ = false;
@@ -99,6 +104,8 @@ private:
     std::string error_message_;
     bool error_pending_ = false;
     std::string status_ = "Selecciona un core y abre un juego.";
+    std::string glsl_version_ = "#version 330 core";
+    std::string renderer_info_;
 
     std::vector<std::filesystem::path> recent_;
 
@@ -112,9 +119,9 @@ private:
     std::chrono::steady_clock::time_point last_tick_{};
     double frame_accumulator_ = 0.0;
 
-    int video_width_ = 0;
-    int video_height_ = 0;
     double ui_fps_ = 0.0;
+    double core_fps_ = 0.0;
+    int core_frames_ = 0;
     std::chrono::steady_clock::time_point fps_tick_{};
     int fps_frames_ = 0;
 };

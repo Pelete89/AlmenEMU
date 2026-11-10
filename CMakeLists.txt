@@ -7,6 +7,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include(FetchContent)
+find_package(OpenGL REQUIRED)
 
 # --- SDL3 (static) -----------------------------------------------------------
 set(SDL_SHARED OFF CACHE BOOL "" FORCE)
@@ -38,14 +39,14 @@ add_library(imgui STATIC
     ${imgui_SOURCE_DIR}/imgui_tables.cpp
     ${imgui_SOURCE_DIR}/imgui_widgets.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
-    ${imgui_SOURCE_DIR}/backends/imgui_impl_sdlrenderer3.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
 )
 target_include_directories(imgui PUBLIC
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
 )
 target_compile_features(imgui PUBLIC cxx_std_17)
-target_link_libraries(imgui PUBLIC SDL3::SDL3-static)
+target_link_libraries(imgui PUBLIC SDL3::SDL3-static OpenGL::GL)
 
 # --- Application -------------------------------------------------------------
 add_executable(AlmenEMU
@@ -53,13 +54,14 @@ add_executable(AlmenEMU
     src/app/Application.cpp
     src/core/LibretroCore.cpp
     src/core/LibretroHost.cpp
+    src/video/OpenGLBackend.cpp
 )
 
 target_include_directories(AlmenEMU PRIVATE
     src
     third_party/libretro/include
 )
-target_link_libraries(AlmenEMU PRIVATE imgui SDL3::SDL3-static)
+target_link_libraries(AlmenEMU PRIVATE imgui SDL3::SDL3-static OpenGL::GL ${CMAKE_DL_LIBS})
 target_compile_definitions(AlmenEMU PRIVATE SDL_MAIN_HANDLED)
 
 if(MSVC)
@@ -73,6 +75,7 @@ if(APPLE)
         "-framework CoreFoundation"
         "-framework Foundation"
     )
+    target_compile_definitions(AlmenEMU PRIVATE GL_SILENCE_DEPRECATION)
 endif()
 
 # Copy cores/ next to the executable at build time.

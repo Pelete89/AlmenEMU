@@ -3,9 +3,12 @@
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_dialog.h>
+#include <SDL3/SDL_opengl.h>
 #include <imgui.h>
+#include <imgui_impl_opengl3.h>
 #include <imgui_impl_sdl3.h>
-#include <imgui_impl_sdlrenderer3.h>
+
+#include "video/OpenGLBackend.h"
 
 #include <algorithm>
 #include <cctype>
@@ -94,13 +97,18 @@ int Application::Run(int argc, char** argv) {
         const std::string argument = argv[i];
         if (argument == "--help" || argument == "-h") {
             std::printf("AlmenEMU 0.1.0\n"
-                        "Uso: AlmenEMU [--core <ruta>] [juego]\n\n"
+                        "Uso: AlmenEMU [--core <ruta>] [--software] [juego]\n\n"
                         "  --core <ruta>  Core libretro (azahar_libretro.dll/.so/.dylib)\n"
+                        "  --software     Fuerza el renderer software del core\n"
                         "  juego          ROM .3ds, .cci, .cxi, .app, .cia o .3dsx\n");
             return 0;
         }
         if (argument == "--core" && i + 1 < argc) {
             cli_core = FromUtf8(argv[++i]);
+            continue;
+        }
+        if (argument == "--software") {
+            force_software_ = true;
             continue;
         }
         if (argument == "--game" && i + 1 < argc) {
@@ -126,6 +134,87 @@ int Application::Run(int argc, char** argv) {
     MainLoop();
     Shutdown();
     return 0;
+}
+
+bool Application::CreateWindowAndContext(std::string& error) {
+    struct Attempt {
+        int major;
+        int minor;
+        const char* glsl;
+    };
+
+    const Attempt attempts[] = {
+        {4, 3, "#version 430 core"},
+        {4, 1, "#version 410 core"},
+        {3, 3, "#version 330 core"},
+    };
+
+    std::string last_error;
+    for (const auto& attempt : attempts) {
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, attempt.major);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, attempt.minor);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
+        SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+        SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 0);
+        SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 0);
+
+        window_ = SDL_CreateWindow("AlmenEMU", 1280, 800,
+                                   SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
+        if (window_ == nullptr) {
+            last_error = SDL_GetError();
+            continue;
+        }
+
+        gl_context_ = SDL_GL_CreateContext(window_);
+        if (gl_context_ == nullptr) {
+            last_error = SDL_GetError();
+            SDL_DestroyWindow(window_);
+            window_ = nullptr;
+            continue;
+        }
+
+        if (!SDL_GL_MakeCurrent(window_, gl_context_)) {
+            last_error = SDL_GetError();
+            SDL_GL_DestroyContext(gl_context_);
+            gl_context_ = nullptr;
+            SDL_DestroyWindow(window_);
+            window_ = nullptr;
+            continue;
+        }
+
+        // Vsync is intentionally disabled: on drivers where a core+UI frame
+        // takes slightly longer than one refresh interval, blocking vsync
+        // halves the UI rate to 30 Hz. The main loop paces at 60 Hz instead.
+        SDL_GL_SetSwapInterval(0);
+
+        GLint major = 0;
+        GLint minor = 0;
+        glGetIntegerv(GL_MAJOR_VERSION, &major);
+        glGetIntegerv(GL_MINOR_VERSION, &minor);
+        const auto* version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
+        const auto* renderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+        const auto* vendor = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
+
+        hardware_supported_ = (major > 4) || (major == 4 && minor >= 3);
+        glsl_version_ = attempt.glsl;
+        renderer_info_ = version != nullptr ? version : "OpenGL desconocido";
+        if (renderer != nullptr) {
+            renderer_info_ += " | ";
+            renderer_info_ += renderer;
+        }
+        if (vendor != nullptr) {
+            renderer_info_ += " | ";
+            renderer_info_ += vendor;
+        }
+        status_ = std::string("OpenGL ") + std::to_string(major) + "." +
+                  std::to_string(minor) +
+                  (hardware_supported_ ? " (hardware disponible)" : " (software)");
+        return true;
+    }
+
+    error = last_error.empty() ? "No se pudo crear un contexto OpenGL 3.3+." : last_error;
+    return false;
 }
 
 bool Application::Init() {
@@ -160,21 +249,21 @@ bool Application::Init() {
 
     LoadRecent();
 
-    window_ = SDL_CreateWindow("AlmenEMU", 1280, 800, SDL_WINDOW_RESIZABLE);
-    if (window_ == nullptr) {
-        std::fprintf(stderr, "No se pudo crear la ventana: %s\n", SDL_GetError());
+    std::string gl_error;
+    if (!CreateWindowAndContext(gl_error)) {
+        std::fprintf(stderr, "No se pudo crear la ventana OpenGL: %s\n", gl_error.c_str());
         return false;
     }
 
-    renderer_ = SDL_CreateRenderer(window_, nullptr);
-    if (renderer_ == nullptr) {
-        renderer_ = SDL_CreateRenderer(window_, "software");
-    }
-    if (renderer_ == nullptr) {
-        std::fprintf(stderr, "No se pudo crear el renderer: %s\n", SDL_GetError());
+    video_ = std::make_unique<OpenGLBackend>();
+    if (!video_->Initialize(window_, gl_error)) {
+        std::fprintf(stderr, "No se pudo inicializar el backend OpenGL: %s\n", gl_error.c_str());
         return false;
     }
-    SDL_SetRenderVSync(renderer_, 1);
+
+    hardware_enabled_ = hardware_supported_ && !force_software_;
+    host_.SetVideoBackend(video_.get());
+    host_.SetHardwareEnabled(hardware_enabled_);
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -185,12 +274,12 @@ bool Application::Init() {
     ImGui::StyleColorsDark();
     ApplyStyle();
 
-    if (!ImGui_ImplSDL3_InitForSDLRenderer(window_, renderer_)) {
-        std::fprintf(stderr, "No se pudo inicializar ImGui (SDL3).\n");
+    if (!ImGui_ImplSDL3_InitForOpenGL(window_, gl_context_)) {
+        std::fprintf(stderr, "No se pudo inicializar ImGui (SDL3 OpenGL).\n");
         return false;
     }
-    if (!ImGui_ImplSDLRenderer3_Init(renderer_)) {
-        std::fprintf(stderr, "No se pudo inicializar ImGui (renderer).\n");
+    if (!ImGui_ImplOpenGL3_Init(glsl_version_.c_str())) {
+        std::fprintf(stderr, "No se pudo inicializar ImGui (OpenGL3).\n");
         return false;
     }
     imgui_ready_ = true;
@@ -226,9 +315,12 @@ void Application::Shutdown() {
         core_.Unload();
     }
 
-    if (game_texture_ != nullptr) {
-        SDL_DestroyTexture(game_texture_);
-        game_texture_ = nullptr;
+    if (gl_context_ != nullptr) {
+        SDL_GL_MakeCurrent(window_, gl_context_);
+    }
+    if (video_ != nullptr) {
+        video_->Shutdown();
+        video_.reset();
     }
     if (gamepad_ != nullptr) {
         SDL_CloseGamepad(gamepad_);
@@ -236,15 +328,15 @@ void Application::Shutdown() {
     }
 
     if (imgui_ready_) {
-        ImGui_ImplSDLRenderer3_Shutdown();
+        ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplSDL3_Shutdown();
         ImGui::DestroyContext();
         imgui_ready_ = false;
     }
 
-    if (renderer_ != nullptr) {
-        SDL_DestroyRenderer(renderer_);
-        renderer_ = nullptr;
+    if (gl_context_ != nullptr) {
+        SDL_GL_DestroyContext(gl_context_);
+        gl_context_ = nullptr;
     }
     if (window_ != nullptr) {
         SDL_DestroyWindow(window_);
@@ -275,6 +367,7 @@ void Application::MainLoop() {
             }
         }
 
+        SDL_GL_MakeCurrent(window_, gl_context_);
         UpdateInput();
 
         const auto now = Clock::now();
@@ -292,6 +385,7 @@ void Application::MainLoop() {
                 frame_accumulator_ -= 1.0;
                 ++frames;
             }
+            core_frames_ += frames;
             if (frame_accumulator_ > 3.0) {
                 frame_accumulator_ = 0.0;
             }
@@ -299,35 +393,53 @@ void Application::MainLoop() {
             frame_accumulator_ = 0.0;
         }
 
-        UpdateTexture();
-
-        ImGui_ImplSDLRenderer3_NewFrame();
+        ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
         DrawUI();
         ImGui::Render();
 
-        SDL_SetRenderDrawColor(renderer_, 14, 16, 21, 255);
-        SDL_RenderClear(renderer_);
-        ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer_);
-        SDL_RenderPresent(renderer_);
+        int drawable_width = 0;
+        int drawable_height = 0;
+        SDL_GetWindowSizeInPixels(window_, &drawable_width, &drawable_height);
+        if (drawable_width <= 0 || drawable_height <= 0) {
+            drawable_width = 1;
+            drawable_height = 1;
+        }
+
+        if (video_ != nullptr) {
+            video_->BindDefaultFramebuffer();
+        }
+        glViewport(0, 0, drawable_width, drawable_height);
+        glDisable(GL_SCISSOR_TEST);
+        glClearColor(0.055f, 0.063f, 0.082f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+        SDL_GL_SwapWindow(window_);
 
         ++fps_frames_;
         const auto fps_now = Clock::now();
         const double fps_delta = std::chrono::duration<double>(fps_now - fps_tick_).count();
         if (fps_delta >= 0.5) {
             ui_fps_ = static_cast<double>(fps_frames_) / fps_delta;
+            core_fps_ = static_cast<double>(core_frames_) / fps_delta;
+            if (SDL_getenv("ALMENEMU_LOG_FPS") != nullptr) {
+                SDL_Log("FPS UI: %.2f | core: %.2f", ui_fps_, core_fps_);
+            }
             fps_frames_ = 0;
+            core_frames_ = 0;
             fps_tick_ = fps_now;
         }
 
-        // Pace the UI at ~60 Hz when vsync is not available.
+        // Pace the UI/core loop at ~60 Hz. Vsync is disabled in context creation.
         const auto frame_end = Clock::now();
         const double frame_seconds =
             std::chrono::duration<double>(frame_end - now).count();
         constexpr double target_seconds = 1.0 / 60.0;
         if (frame_seconds < target_seconds) {
-            SDL_Delay(static_cast<Uint32>((target_seconds - frame_seconds) * 1000.0));
+            SDL_DelayPrecise(
+                static_cast<Uint64>((target_seconds - frame_seconds) * 1'000'000'000.0));
         }
     }
 }
@@ -545,36 +657,6 @@ void Application::UpdateInput() {
     host_.SetAxis(0, x, y);
 }
 
-void Application::UpdateTexture() {
-    if (!host_.ConsumeVideoFrame()) {
-        return;
-    }
-
-    const int width = host_.VideoWidth();
-    const int height = host_.VideoHeight();
-    if (width <= 0 || height <= 0) {
-        return;
-    }
-
-    if (game_texture_ == nullptr || width != video_width_ || height != video_height_) {
-        if (game_texture_ != nullptr) {
-            SDL_DestroyTexture(game_texture_);
-            game_texture_ = nullptr;
-        }
-        game_texture_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_XRGB8888,
-                                          SDL_TEXTUREACCESS_STREAMING, width, height);
-        if (game_texture_ == nullptr) {
-            status_ = std::string("No se pudo crear la textura del juego: ") + SDL_GetError();
-            return;
-        }
-        SDL_SetTextureScaleMode(game_texture_, SDL_SCALEMODE_LINEAR);
-        video_width_ = width;
-        video_height_ = height;
-    }
-
-    SDL_UpdateTexture(game_texture_, nullptr, host_.Pixels(), width * 4);
-}
-
 void Application::LoadCore(const std::filesystem::path& path) {
     if (!std::filesystem::exists(path)) {
         ShowError("El core no existe:\n" + PathToUtf8(path));
@@ -591,12 +673,9 @@ void Application::LoadCore(const std::filesystem::path& path) {
     core_loaded_ = false;
     game_path_.clear();
 
-    if (game_texture_ != nullptr) {
-        SDL_DestroyTexture(game_texture_);
-        game_texture_ = nullptr;
+    if (video_ != nullptr) {
+        video_->Reset();
     }
-    video_width_ = 0;
-    video_height_ = 0;
 
     std::string error;
     if (!core_.Load(path, error)) {
@@ -610,6 +689,9 @@ void Application::LoadCore(const std::filesystem::path& path) {
         core_.Unload();
         return;
     }
+
+    host_.SetVideoBackend(video_.get());
+    host_.SetHardwareEnabled(hardware_enabled_);
 
     core_loaded_ = true;
     core_path_ = path;
@@ -643,16 +725,12 @@ void Application::LoadGame(const std::filesystem::path& path) {
 
     game_path_ = path;
 
-    if (game_texture_ != nullptr) {
-        SDL_DestroyTexture(game_texture_);
-        game_texture_ = nullptr;
-    }
-    video_width_ = 0;
-    video_height_ = 0;
-
     last_tick_ = std::chrono::steady_clock::now();
     frame_accumulator_ = 0.0;
-    status_ = "Jugando: " + PathToUtf8(path.filename());
+    core_frames_ = 0;
+    core_fps_ = 0.0;
+    status_ = "Jugando: " + PathToUtf8(path.filename()) +
+              (video_ != nullptr ? " | " + std::string(video_->Name()) : "");
     AddRecent(path);
 }
 
@@ -661,12 +739,6 @@ void Application::UnloadGame() {
         host_.UnloadGame();
     }
     game_path_.clear();
-    if (game_texture_ != nullptr) {
-        SDL_DestroyTexture(game_texture_);
-        game_texture_ = nullptr;
-    }
-    video_width_ = 0;
-    video_height_ = 0;
     status_ = "Juego cerrado.";
 }
 
@@ -711,18 +783,24 @@ void Application::LoadState() {
 }
 
 void Application::TakeScreenshot() {
-    if (!host_.IsGameLoaded() || host_.Pixels() == nullptr || host_.VideoWidth() <= 0 ||
-        host_.VideoHeight() <= 0) {
+    if (!host_.IsGameLoaded()) {
         return;
     }
 
     std::error_code ec;
     std::filesystem::create_directories(screenshots_dir_, ec);
 
+    std::vector<uint32_t> pixels;
+    int width = 0;
+    int height = 0;
+    if (video_ == nullptr || !video_->ReadPixels(pixels, width, height)) {
+        ShowError("Todavía no hay un frame para capturar.");
+        return;
+    }
+
     const auto path = ScreenshotPath();
     SDL_Surface* surface = SDL_CreateSurfaceFrom(
-        host_.VideoWidth(), host_.VideoHeight(), SDL_PIXELFORMAT_XRGB8888,
-        const_cast<uint32_t*>(host_.Pixels()), host_.VideoWidth() * 4);
+        width, height, SDL_PIXELFORMAT_XRGB8888, pixels.data(), width * 4);
     if (surface == nullptr) {
         ShowError(std::string("No se pudo crear la captura: ") + SDL_GetError());
         return;
@@ -1055,10 +1133,16 @@ void Application::DrawGameView() {
     const ImVec2 image_pos(cursor.x + (available.x - image_width) * 0.5f,
                            cursor.y + (view_height - image_height) * 0.5f);
 
-    if (game_texture_ != nullptr) {
+    const uintptr_t texture_id = video_ != nullptr ? video_->TextureId() : 0;
+    if (texture_id != 0) {
+        float u0 = 0.0f;
+        float v0 = 0.0f;
+        float u1 = 1.0f;
+        float v1 = 1.0f;
+        video_->GetTextureUVs(u0, v0, u1, v1);
         ImGui::SetCursorScreenPos(image_pos);
-        ImGui::Image(static_cast<ImTextureID>(reinterpret_cast<intptr_t>(game_texture_)),
-                     ImVec2(image_width, image_height));
+        ImGui::Image(static_cast<ImTextureID>(texture_id), ImVec2(image_width, image_height),
+                     ImVec2(u0, v0), ImVec2(u1, v1));
     } else {
         const char* text = "Esperando el primer frame...";
         const ImVec2 text_size = ImGui::CalcTextSize(text);
@@ -1072,8 +1156,9 @@ void Application::DrawGameView() {
 
     ImGui::Text("%s", PathToUtf8(game_path_.filename()).c_str());
     ImGui::SameLine();
-    ImGui::TextDisabled("| %s | %.2f fps | UI %.0f Hz", host_.CoreName().c_str(), host_.Fps(),
-                        ui_fps_);
+    ImGui::TextDisabled("| %s | %s | core %.1f fps | UI %.0f Hz", host_.CoreName().c_str(),
+                        video_ != nullptr ? video_->Name() : "sin backend",
+                        core_fps_ > 0.0 ? core_fps_ : host_.Fps(), ui_fps_);
     if (host_.IsPaused()) {
         ImGui::SameLine();
         ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.2f, 1.0f), "PAUSA");
@@ -1100,9 +1185,8 @@ void Application::DrawGameView() {
         TakeScreenshot();
     }
 
-    if (host_.HardwareRenderRequested()) {
-        ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.25f, 1.0f),
-                           "El core pidió render hardware; ahora mismo se está usando software.");
+    if (video_ != nullptr) {
+        ImGui::TextDisabled("Render: %s", video_->Name());
     }
 }
 
@@ -1135,9 +1219,15 @@ void Application::DrawSidePanel() {
                 }
 
                 ImGui::SeparatorText("Estado");
-                ImGui::Text("FPS core: %.2f", host_.Fps());
-                ImGui::Text("Resolución: %dx%d", host_.VideoWidth(), host_.VideoHeight());
+                ImGui::Text("FPS core: %.1f", core_fps_ > 0.0 ? core_fps_ : host_.Fps());
+                ImGui::Text("Resolución: %dx%d",
+                            video_ != nullptr ? video_->FrameWidth() : 0,
+                            video_ != nullptr ? video_->FrameHeight() : 0);
                 ImGui::Text("Aspecto: %.3f", host_.AspectRatio());
+                ImGui::Text("Render: %s", video_ != nullptr ? video_->Name() : "sin backend");
+                if (!renderer_info_.empty()) {
+                    ImGui::TextWrapped("Driver: %s", renderer_info_.c_str());
+                }
             } else {
                 ImGui::TextWrapped("No hay ningún juego cargado.");
                 ImGui::Spacing();
@@ -1205,6 +1295,8 @@ void Application::DrawCoreOptions() {
                 }
             }
 
+            const bool locked = option->key == "citra_graphics_api" && host_.IsGameLoaded();
+            ImGui::BeginDisabled(locked);
             ImGui::SetNextItemWidth(-1.0f);
             if (ImGui::BeginCombo("##value", current_label.c_str())) {
                 for (const auto& value : option->values) {
@@ -1218,10 +1310,10 @@ void Application::DrawCoreOptions() {
                 }
                 ImGui::EndCombo();
             }
+            ImGui::EndDisabled();
 
-            if (option->key == "citra_graphics_api" && option->current != "Software") {
-                ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.2f, 1.0f),
-                                   "El render hardware aún no está implementado.");
+            if (locked) {
+                ImGui::TextDisabled("Requiere reiniciar el juego.");
             }
             ImGui::PopID();
         }
@@ -1270,6 +1362,12 @@ void Application::DrawAboutPopup() {
 
     ImGui::TextUnformatted("AlmenEMU 0.1.0");
     ImGui::TextDisabled("Frontend libretro para emulación de Nintendo 3DS");
+    if (video_ != nullptr) {
+        ImGui::Text("Render: %s", video_->Name());
+    }
+    if (!renderer_info_.empty()) {
+        ImGui::TextWrapped("Driver: %s", renderer_info_.c_str());
+    }
     ImGui::Spacing();
     ImGui::TextWrapped(
         "Motor de emulación: Azahar (GPL-3.0), cargado como core libretro. "
