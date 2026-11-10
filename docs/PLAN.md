@@ -627,27 +627,23 @@ Para no depender de ROMs ni de Azahar en CI:
 ### 11.1 Estado del repositorio
 
 - Repositorio local inicializado en `main`.
-- Commit inicial: `1cc79d5 Initial AlmenEMU libretro frontend scaffold`.
-- Identidad local: `AlmenEMU Dev <dev@almenemu.local>` (cambiar antes de publicar).
-- No hay remoto configurado todavía.
+- Remoto `origin`: <https://github.com/Pelete89/AlmenEMU> (público).
+- Identidad configurada: `Pelete89 <25388925+Pelete89@users.noreply.github.com>`.
+- Autenticación: GitHub CLI (`gh`) con la cuenta `Pelete89`.
+- El historial inicial contiene la scaffold, el plan y su revisión 1.1.
+- Estado esperado: árbol limpio y `main` sincronizado con `origin/main`.
 
-Para publicarlo en GitHub/GitLab:
+Comandos de publicación:
 
 ```bash
-# GitHub
-git remote add origin git@github.com:<usuario>/AlmenEMU.git
-
-# GitLab
-# git remote add origin git@gitlab.com:<usuario>/AlmenEMU.git
-
 git push -u origin main
 ```
 
-Antes de publicar, cambiar la identidad si se desea:
+Para un espejo en GitLab:
 
 ```bash
-git config user.name "Tu Nombre"
-git config user.email "tu@email"
+git remote add gitlab git@gitlab.com:<usuario>/AlmenEMU.git
+git push -u gitlab main
 ```
 
 ### 11.2 Estrategia de ramas
