@@ -5,6 +5,10 @@
 > **Estado:** vivo; se actualiza al cerrar cada hito.
 > **Revisión 1.3:** cerrado el P0 de robustez: fallback de render hardware, `context_destroy`,
 > doble free de SDL3 al cerrar, tests headless con core simulado y CI con `ctest`.
+> **Revisión 1.4:** 2026-11-19 — P0 cerrado por completo: `context_destroy` antes de
+> `retro_unload_game()`, API libretro validada en `LibretroCore::Load`, `ShouldQuit()`
+> consumida en el bucle, `Ctrl+Q` como atajo (antes también pulsaba `JOYPAD_L`), `TextureId()`
+> sin frame, carga única del core por CLI y CI en verde en las tres plataformas.
 > **Revisión 1.2:** M2 (OpenGL 4.3) implementado y verificado en Windows; Linux pendiente de CI.
 > **Licencia del proyecto:** GPL-3.0-or-later.
 > **Documento relacionado:** [`docs/ARCHITECTURE.md`](ARCHITECTURE.md).
@@ -107,7 +111,7 @@ estimaciones de este documento son indicativas, no compromisos de fecha.
 | Recientes | Completo | `config/recent.txt`, máx. 12 |
 | Diálogos y drag & drop | Completo | SDL3 file dialog + `SDL_EVENT_DROP_FILE` |
 | Documentación | Completo (base) | README, ARCHITECTURE, PLAN, CHANGELOG, THIRD_PARTY_NOTICES |
-| Tests del host | Completo | Core simulado + CTest (`host_tests`), 80 comprobaciones sin GPU |
+| Tests del host | Completo | Core simulado + CTest (`host_tests`), 85 comprobaciones sin GPU |
 | Verificación funcional | Completo en Windows | Azahar 2126.2 + Universal-Updater 3.4.1 `.3dsx`; OpenGL 4.3 hardware; Linux verificado en build + tests headless; macOS pendiente |
 
 ### 3.2 Hitos cerrados
@@ -149,8 +153,8 @@ estimaciones de este documento son indicativas, no compromisos de fecha.
 ### 3.3 Limitaciones conocidas del MVP
 
 - macOS sigue en render software hasta M3 (Vulkan/MoltenVK).
-- Linux compila y pasa los tests headless (Mesa/LLVM, core simulado), pero falta validar
-  Azahar real y obtener CI en verde.
+- Linux compila y pasa los tests headless (GCC 15.3, core simulado), pero falta validar
+  Azahar real en una GPU. La CI está verde en las tres plataformas (run #2, 2026-11-19).
 - El touchscreen y el C-Stick no están mapeados por completo.
 - Vsync está desactivado; el frame limiter usa `SDL_DelayPrecise`.
 - No hay shaders ni escalado entero configurables.
@@ -732,7 +736,10 @@ Tipos: `feat`, `fix`, `docs`, `build`, `test`, `refactor`, `perf`, `chore`.
 
 ---
 
-## 12. Próximos 7 días (sprint de arranque de M2)
+## 12. Sprint de arranque de M2 (histórico)
+
+> M2 está cerrado; este sprint se conserva como registro. Las tareas de robustez del día 6
+> se completaron más tarde en el P0 de la revisión 1.3 y 1.4.
 
 ### Día 1 — Diseño
 
@@ -872,13 +879,13 @@ corre a velocidad completa y la UI no se degrada; el fallback software sigue ope
 | Audio init | ✅ | SDL3, 32.768 Hz |
 | Savestate `F5`/`F9` | ✅ | Guardado y restaurado en hardware |
 | Captura `F12` | ✅ | BMP desde FBO (400x480) |
-| Linux/macOS | ⏳ | CI pendiente de ejecutarse; macOS sigue en render software (M3) |
+| CI (build + `ctest`) | ✅ | GitHub Actions run #2, 2026-11-19: Linux, Windows y macOS en verde |
 | Render hardware OpenGL 4.3 | ✅ | Windows, AMD Radeon 780M; core 60 fps / UI 60 Hz |
 | Fallback `--software` | ✅ | Windows; core ~44 fps / UI ~11 Hz |
 | Savestate carga | ✅ | Windows, hardware; estado restaurado |
 | Captura FBO hardware | ✅ | Windows; BMP 400x480 correcto |
-| Linux | ✅ | GCC 15.3 + SDL3 3.4.14 del sistema + Mesa: build completo, tests headless
-  80/0 y `--help`; Azahar real pendiente |
+| Linux | ✅ | GCC 15.3 + SDL3 de FetchContent (`release-3.4.20`) + Mesa: build limpio sin
+  warnings, tests headless 85/0 y `--help`; Azahar real pendiente |
 | Vulkan/macOS | ⏳ | M3 |
 
 ---
@@ -896,3 +903,4 @@ los gates de release y el backlog; los cambios se registran en `CHANGELOG.md`.*
 | 1.1 | 2026-11-10 | Revisión completa: gates de release alineados con hitos; matriz de plataformas/core; core universal macOS; dependencias entre hitos; onboarding mínimo; tareas de pin/hash, savestate atómico, SBOM, accesibilidad de CI y documentación; decisiones abiertas (ADR). |
 | 1.2 | 2026-11-10 | M2 implementado: backend OpenGL 4.3, FBO, fallback software, `--software`, captura FBO, frame pacing y verificación en Windows. Linux/macOS pendientes. |
 | 1.3 | 2026-11-19 | P0 cerrado: `SET_HW_RENDER` validado (solo OpenGL de escritorio), fallback software sin `context_reset` forzado, `context_destroy` al cerrar, doble free de SDL3 corregido, core simulado + `host_tests` en CTest y CI con `ctest` y caché de dependencias. Linux verificado en build + tests headless. |
+| 1.4 | 2026-11-19 | Cierre del P0: `context_destroy` antes de `retro_unload_game()` al cerrar juego (con test de orden), validación de `retro_api_version()`, `ShouldQuit()` consumida, `Ctrl+Q` como atajo sin pulsar `L`, `TextureId()` sin frame, carga única de core por CLI, `IsOptionAvailable()` eliminada, `LogCallback` seguro con `fmt` null, `.gitignore` cubre `build*/`. Tests: 85 comprobaciones, CI verde en tres plataformas. |

@@ -33,11 +33,25 @@ y el versionado usa [Semantic Versioning](https://semver.org/lang/es/).
 - `GET_PREFERRED_HW_RENDER` respeta `--software` y el hardware deshabilitado.
 - `context_destroy` del core se invoca al cerrar la app, con el contexto GL current, antes
   de `retro_deinit()`.
+- `LibretroCore::Load` rechaza cores cuyo `retro_api_version()` no coincide con
+  `RETRO_API_VERSION` (antes se cargaba el símbolo y nunca se comprobaba).
+- `Run()` carga el core una sola vez: `Init()` cargaba el core por defecto y luego
+  `--core` volvía a cargarlo, ejecutando `retro_init()`/`retro_deinit()` dos veces.
+- Los atajos `Ctrl+Q` y `Ctrl+O` no se reenvían como input del juego; `SDLK_Q` está
+  mapeado a `RETRO_DEVICE_ID_JOYPAD_L`, así que `Ctrl+Q` pulsaba L.
+- `VideoBackend::TextureId()` devuelve 0 hasta que existe un frame, así la UI muestra
+  "Esperando el primer frame" en lugar de un rectángulo negro.
+- `RETRO_ENVIRONMENT_SHUTDOWN` se consume en el bucle principal (`ShouldQuit()`); antes el
+  flag se ponía y nadie lo consultaba.
+- Se elimina `IsOptionAvailable()`: código muerto (`options_` ya se expone).
+- El FBO se dimensiona con la resolución base cuando aún no existe. Es *grow-only*, así que
+  en hardware suele quedarse en el 2048x2048 creado por `SET_HW_RENDER` y la presentación
+  recorta la región activa con UVs.
+- `.gitignore` ahora cubre `build*/` (antes `build-linux/` no se ignoraba).
 - README enlaza el plan y el estado del proyecto.
 - Normalización de finales de línea con `.gitattributes`.
 - La UI deja de usar `SDL_Renderer`; usa un contexto OpenGL 4.3/4.1/3.3.
 - Vsync desactivado y frame limiter a ~60 Hz para evitar la caída a 30 Hz.
-- El FBO se dimensiona con la resolución base actual, no con el máximo teórico.
 
 ### Fixed
 
@@ -46,6 +60,10 @@ y el versionado usa [Semantic Versioning](https://semver.org/lang/es/).
 - El fallback software ya no se cancela cuando el core pide hardware y el backend lo
   rechaza (antes se llamaba a `context_reset` sin callback válido y se descargaba el juego).
 - `context_destroy` no se llamaba nunca: los recursos GL del core se liberan al cerrar.
+- `context_destroy` se invoca **antes** de `retro_unload_game()` al cerrar un juego. Con
+  render hardware activo, cerrar el juego dejaba los recursos GL del core sin liberar;
+  Azahar solo suelta el renderer si el juego sigue cargado, por eso el orden importa.
+- `LogCallback` ya no es UB cuando un core pasa `fmt == nullptr` a `vsnprintf`.
 
 ## [0.1.0] - 2026-11-10
 

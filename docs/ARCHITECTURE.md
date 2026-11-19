@@ -54,16 +54,17 @@ La app crea un contexto **OpenGL 4.3 core** (con fallback a 4.1/3.3) y usa
   `get_proc_address`, pero **no** llama todavía a `context_reset`.
 - Tras `retro_load_game()` y `retro_get_system_av_info()`, dimensiona el FBO con
   `base_width`/`base_height` y llama a `context_reset()`. Azahar carga el juego dentro de
-  ese callback.
+  ese callback. El FBO es *grow-only*: si `SET_HW_RENDER` ya creó el de 2048x2048, no se
+  reduce, así que la presentación recorta con UVs la región activa.
 - El core renderiza en el FBO; el frontend recibe `RETRO_HW_FRAME_BUFFER_VALID` y muestra
   la textura con ImGui.
 - `bottom_left_origin=true` de Azahar se compensa invirtiendo las coordenadas UV.
 - Si el FBO es mayor que el frame (por ejemplo, single-screen), las UV recortan la región
   activa.
-- `context_destroy` no se invoca al cambiar de juego: el contexto OpenGL es propiedad de
-  la app y se destruye al cerrar. El core libera sus recursos en `retro_unload_game()`.
-- Al cerrar la app sí se llama `context_destroy` (una sola vez, con el contexto GL current)
-  antes de `retro_deinit()`, que es cuando el core debe liberar sus recursos GL.
+- `context_destroy` se invoca antes de `retro_unload_game()` al cerrar un juego y al cerrar
+  la app, siempre con el contexto GL current y el core todavía cargado, que es cuando el core
+  debe liberar sus recursos GL. El contexto OpenGL es propiedad de la app y se destruye al
+  cerrar; una sola vez por sesión de core.
 - `SET_HW_RENDER` solo se acepta para `RETRO_HW_CONTEXT_OPENGL_CORE` u `OPENGL`. Si el core
   pide Vulkan, GLES o D3D se devuelve `false` y el core cae a software; el frontend no le
   entrega callbacks de FBO OpenGL para un contexto que no es OpenGL.
@@ -177,10 +178,11 @@ core observó de verdad (por ejemplo, si `context_reset`/`context_destroy` se ll
 `tests/test_host.cpp` inyecta un `VideoBackend` de prueba (sin GPU) en `LibretroHost` y
 cubre:
 
-1. Ciclo software: opciones, frames, audio, input, savestate y estado corrupto.
+1. Ciclo software: opciones, frames, audio, input, savestate, estado corrupto y API libretro.
 2. Rechazo de `SET_HW_RENDER` con contexto Vulkan.
 3. Backend que rechaza el hardware y el juego continúa en software (regresión).
-4. Ciclo hardware: `GET_PREFERRED_HW_RENDER`, `context_reset` y `context_destroy`.
+4. Ciclo hardware: `GET_PREFERRED_HW_RENDER`, `context_reset`, `context_destroy` y el orden
+   `context_destroy` antes de `retro_unload_game` al cerrar el juego (regresión).
 5. `GET_PREFERRED_HW_RENDER` con el hardware deshabilitado (`--software`).
 
 Se registran en CTest como `host_tests` y corren en CI en las tres plataformas. No
