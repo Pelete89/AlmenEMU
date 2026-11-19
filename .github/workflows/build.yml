@@ -36,7 +36,9 @@ jobs:
             artifact_name: AlmenEMU-windows-x86_64
             run_cmd: ./build/Release/AlmenEMU.exe --help
           - name: macOS arm64
-            os: macos-14
+            # macos-14 (Sonoma) is fully unsupported since Nov 2026.
+            # macos-15 is the current stable image and runs on Apple Silicon.
+            os: macos-15
             preset: macos
             artifact: build/AlmenEMU
             artifact_name: AlmenEMU-macos-arm64
@@ -54,7 +56,7 @@ jobs:
             build-essential cmake ninja-build pkg-config \
             libasound2-dev libpulse-dev libudev-dev libdbus-1-dev \
             libx11-dev libxext-dev libxinerama-dev libxrandr-dev libxi-dev \
-            libxcursor-dev libxfixes-dev libxss-dev \
+            libxcursor-dev libxfixes-dev libxss-dev libxtst-dev \
             libwayland-dev wayland-protocols libdecor-0-dev \
             libxkbcommon-dev libxkbcommon-x11-dev \
             libgl1-mesa-dev libglx-dev libegl1-mesa-dev libgles2-mesa-dev \
