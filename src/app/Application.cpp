@@ -125,8 +125,18 @@ int Application::Run(int argc, char** argv) {
         return 1;
     }
 
+    // Load the core once. Init() must not auto-load the default core, otherwise
+    // passing --core would run retro_init()/retro_deinit() twice.
     if (!cli_core.empty()) {
         LoadCore(cli_core);
+    } else {
+        const auto default_core = DefaultCorePath();
+        if (!default_core.empty()) {
+            LoadCore(default_core);
+        } else {
+            status_ = "No se encontró azahar_libretro. Usa 'Seleccionar core...' o ejecuta "
+                      "scripts/fetch_core.py.";
+        }
     }
     if (!cli_game.empty()) {
         LoadGame(cli_game);
@@ -299,14 +309,6 @@ bool Application::Init() {
     fps_tick_ = std::chrono::steady_clock::now();
     last_tick_ = fps_tick_;
 
-    const auto default_core = DefaultCorePath();
-    if (!default_core.empty()) {
-        LoadCore(default_core);
-    } else {
-        status_ = "No se encontró azahar_libretro. Usa 'Seleccionar core...' o ejecuta "
-                  "scripts/fetch_core.py.";
-    }
-
     return true;
 }
 
@@ -360,6 +362,12 @@ void Application::MainLoop() {
         while (SDL_PollEvent(&event)) {
             ImGui_ImplSDL3_ProcessEvent(&event);
             HandleEvent(event);
+        }
+
+        // A core can ask the frontend to close through RETRO_ENVIRONMENT_SHUTDOWN.
+        if (host_.ShouldQuit()) {
+            running_ = false;
+            break;
         }
 
         if (pending_file_.has_value()) {
@@ -494,6 +502,18 @@ void Application::HandleEvent(const SDL_Event& event) {
             break;
         }
 
+        // Ctrl combos are UI shortcuts, not game input. Without this guard the
+        // mapping below would also press the RetroPad button that shares the key
+        // (SDLK_Q is JOYPAD_L, so Ctrl+Q pulsed L).
+        if (ctrl) {
+            if (key == SDLK_Q) {
+                running_ = false;
+            } else if (key == SDLK_O) {
+                OpenFileDialog(false);
+            }
+            break;
+        }
+
         if (key == SDLK_F1) {
             TogglePause();
         } else if (key == SDLK_F2) {
@@ -508,10 +528,6 @@ void Application::HandleEvent(const SDL_Event& event) {
             TakeScreenshot();
         } else if (key == SDLK_ESCAPE && fullscreen_) {
             ToggleFullscreen();
-        } else if (key == SDLK_Q && ctrl) {
-            running_ = false;
-        } else if (key == SDLK_O && ctrl) {
-            OpenFileDialog(false);
         }
 
         if (!ImGui::GetIO().WantCaptureKeyboard) {
