@@ -100,6 +100,7 @@ int Application::Run(int argc, char** argv) {
                         "Uso: AlmenEMU [--core <ruta>] [--software] [juego]\n\n"
                         "  --core <ruta>  Core libretro (azahar_libretro.dll/.so/.dylib)\n"
                         "  --software     Fuerza el renderer software del core\n"
+                        "  --game <ruta>  Equivalente a pasar la ROM como argumento\n"
                         "  juego          ROM .3ds, .cci, .cxi, .app, .cia o .3dsx\n");
             return 0;
         }
@@ -225,10 +226,12 @@ bool Application::Init() {
         return false;
     }
 
+    // SDL_GetBasePath() returns a cached buffer owned by SDL (freed by
+    // SDL_Quit); it must not be passed to SDL_free(). SDL_GetPrefPath(), on the
+    // other hand, returns a freshly allocated string owned by the caller.
     const char* base_path = SDL_GetBasePath();
     base_dir_ = base_path != nullptr ? FromUtf8(base_path)
                                      : std::filesystem::current_path();
-    SDL_free(const_cast<char*>(base_path));
 
     char* pref_path = SDL_GetPrefPath("AlmenEMU", "AlmenEMU");
     data_dir_ = pref_path != nullptr ? FromUtf8(pref_path) : base_dir_ / "data";
@@ -308,6 +311,12 @@ bool Application::Init() {
 }
 
 void Application::Shutdown() {
+    // Releasing the core's hardware context requires the GL context to be
+    // current, so make it current before tearing the host down.
+    if (gl_context_ != nullptr && window_ != nullptr) {
+        SDL_GL_MakeCurrent(window_, gl_context_);
+    }
+
     if (host_.IsInitialized()) {
         host_.Shutdown();
     }
@@ -315,9 +324,6 @@ void Application::Shutdown() {
         core_.Unload();
     }
 
-    if (gl_context_ != nullptr) {
-        SDL_GL_MakeCurrent(window_, gl_context_);
-    }
     if (video_ != nullptr) {
         video_->Shutdown();
         video_.reset();

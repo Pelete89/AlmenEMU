@@ -81,6 +81,8 @@ public:
     const std::string& LastMessage() const { return last_message_; }
     void AddLog(std::string message);
 
+    // True only when the core requested hardware and the backend accepted it.
+    // LoadGame uses it to decide whether context_reset() must run.
     bool HardwareRenderRequested() const { return hw_render_requested_; }
 
 private:

@@ -106,6 +106,13 @@ void LibretroHost::Shutdown() {
 
     CloseAudio();
 
+    // The core may still own GPU resources created in context_reset(); release
+    // them with context_destroy before retro_deinit() and before the core
+    // library is unloaded, while the frontend GPU context is still current.
+    if (video_ != nullptr) {
+        video_->DestroyHardwareContext();
+    }
+
     if (initialized_ && core_ != nullptr) {
         core_->retro_deinit();
     }
@@ -131,6 +138,9 @@ bool LibretroHost::LoadGame(const std::filesystem::path& path, std::string& erro
         UnloadGame();
     }
 
+    // A previous failed load may have left a hardware request accepted.
+    hw_render_requested_ = false;
+
     ConfigureGraphicsApi();
 
     const std::string path_utf8 = PathToUtf8(path);
@@ -151,6 +161,10 @@ bool LibretroHost::LoadGame(const std::filesystem::path& path, std::string& erro
         if (hw_render_requested_) {
             error += "\nEl core pidió render hardware, pero el backend no pudo inicializarlo. "
                      "Prueba con --software.";
+        }
+        if (hw_render_requested_ && video_ != nullptr) {
+            video_->DestroyHardwareContext();
+            hw_render_requested_ = false;
         }
         return false;
     }
@@ -400,17 +414,31 @@ bool LibretroHost::HandleEnvironment(unsigned cmd, void* data) {
     }
 
     case RETRO_ENVIRONMENT_SET_HW_RENDER: {
-        hw_render_requested_ = true;
+        auto* callback = static_cast<retro_hw_render_callback*>(data);
+        if (callback == nullptr) {
+            AddLog("El core envió SET_HW_RENDER sin callback.");
+            return false;
+        }
+        // The frontend only implements desktop OpenGL. Reject Vulkan, GLES and
+        // the D3D backends instead of handing them an OpenGL FBO; the core will
+        // fall back to software rendering.
+        if (callback->context_type != RETRO_HW_CONTEXT_OPENGL_CORE &&
+            callback->context_type != RETRO_HW_CONTEXT_OPENGL) {
+            AddLog("Render hardware rechazado: solo se soporta OpenGL de escritorio.");
+            return false;
+        }
         if (video_ == nullptr) {
             AddLog("El core pidió render hardware, pero no hay backend de vídeo.");
             return false;
         }
         std::string hw_error;
-        if (!video_->SetupHardwareRender(static_cast<retro_hw_render_callback*>(data),
-                                         hw_error)) {
+        if (!video_->SetupHardwareRender(callback, hw_error)) {
             AddLog("Render hardware no disponible: " + hw_error);
             return false;
         }
+        // Only mark the request as accepted once the backend is ready; LoadGame
+        // uses this flag to decide whether it must run context_reset().
+        hw_render_requested_ = true;
         AddLog("Core solicitó render hardware OpenGL.");
         return true;
     }
@@ -420,7 +448,7 @@ bool LibretroHost::HandleEnvironment(unsigned cmd, void* data) {
         return false;
     case RETRO_ENVIRONMENT_GET_PREFERRED_HW_RENDER: {
         auto* type = static_cast<retro_hw_context_type*>(data);
-        if (video_ != nullptr && video_->SupportsHardware()) {
+        if (hardware_enabled_ && video_ != nullptr && video_->SupportsHardware()) {
             *type = RETRO_HW_CONTEXT_OPENGL_CORE;
             return true;
         }

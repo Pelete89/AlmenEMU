@@ -31,6 +31,11 @@ public:
                                      std::string& error) = 0;
     virtual bool ContextReset(std::string& error) = 0;
 
+    // Releases the resources the core created in context_reset(). Must be
+    // called while the GPU context is still current and the core library is
+    // still loaded (libretro's context_destroy contract). Idempotent.
+    virtual void DestroyHardwareContext() = 0;
+
     virtual void OnSoftwareFrame(const void* data, unsigned width, unsigned height,
                                  size_t pitch, retro_pixel_format format) = 0;
     virtual void OnHardwareFrame(unsigned width, unsigned height) = 0;

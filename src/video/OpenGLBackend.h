@@ -25,6 +25,7 @@ public:
     bool SetupHardwareRender(retro_hw_render_callback* callback,
                              std::string& error) override;
     bool ContextReset(std::string& error) override;
+    void DestroyHardwareContext() override;
 
     void OnSoftwareFrame(const void* data, unsigned width, unsigned height,
                          size_t pitch, retro_pixel_format format) override;
@@ -67,6 +68,7 @@ private:
     Functions gl_{};
     bool supports_hardware_ = false;
     bool hardware_active_ = false;
+    bool hardware_context_ready_ = false;
     bool bottom_left_origin_ = true;
 
     GLuint framebuffer_ = 0;

@@ -65,6 +65,8 @@ void OpenGLBackend::Shutdown() {
     frame_height_ = 0;
     has_frame_ = false;
     hardware_active_ = false;
+    // The core is unloaded before this point; never call its callbacks now.
+    hardware_context_ready_ = false;
     hardware_callback_ = nullptr;
     window_ = nullptr;
     if (s_active == this) {
@@ -79,6 +81,7 @@ void OpenGLBackend::Reset() {
     frame_height_ = 0;
     has_frame_ = false;
     hardware_active_ = false;
+    hardware_context_ready_ = false;
     hardware_callback_ = nullptr;
     bottom_left_origin_ = true;
 }
@@ -142,8 +145,31 @@ bool OpenGLBackend::ContextReset(std::string& error) {
     hardware_callback_->context_reset();
     gl_.BindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(previous_fbo));
     hardware_active_ = true;
+    hardware_context_ready_ = true;
     SDL_Log("Contexto hardware de Azahar inicializado.");
     return true;
+}
+
+void OpenGLBackend::DestroyHardwareContext() {
+    if (hardware_callback_ == nullptr) {
+        hardware_context_ready_ = false;
+        return;
+    }
+
+    if (hardware_context_ready_ && hardware_callback_->context_destroy != nullptr) {
+        GLint previous_fbo = 0;
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previous_fbo);
+        if (framebuffer_ != 0) {
+            gl_.BindFramebuffer(GL_FRAMEBUFFER, framebuffer_);
+        }
+        hardware_callback_->context_destroy();
+        gl_.BindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(previous_fbo));
+        SDL_Log("Contexto hardware de Azahar liberado.");
+    }
+
+    hardware_context_ready_ = false;
+    hardware_callback_ = nullptr;
+    hardware_active_ = false;
 }
 
 void OpenGLBackend::OnSoftwareFrame(const void* data, unsigned width, unsigned height,
