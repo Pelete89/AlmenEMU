@@ -73,8 +73,6 @@ public:
     const std::map<std::string, CoreOption>& Options() const { return options_; }
     const std::map<std::string, std::string>& Categories() const { return categories_; }
     void SetOption(const std::string& key, const std::string& value);
-    bool IsOptionAvailable(const std::string& key) const;
-
     const std::string& CoreName() const { return core_name_; }
     const std::string& CoreVersion() const { return core_version_; }
     const std::deque<std::string>& Log() const { return log_; }

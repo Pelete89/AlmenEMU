@@ -293,6 +293,9 @@ RETRO_API bool retro_load_game(const struct retro_game_info* game) {
 
 RETRO_API void retro_unload_game(void) {
     ++g_stats.unload_calls;
+    if (g_stats.context_destroy_calls > 0) {
+        g_stats.destroy_before_unload = 1;
+    }
     g_game_loaded = false;
     g_hw_accepted = false;
 }

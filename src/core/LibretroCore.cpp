@@ -69,6 +69,16 @@ bool LibretroCore::Load(const std::filesystem::path& path, std::string& error) {
         return false;
     }
 
+    // The core must speak the same libretro ABI as the header we were built
+    // against; otherwise every struct we pass to the callbacks is wrong.
+    const unsigned api_version = retro_api_version();
+    if (api_version != RETRO_API_VERSION) {
+        error = "La API libretro del core es " + std::to_string(api_version) +
+                ", el frontend espera " + std::to_string(RETRO_API_VERSION) + ".";
+        Unload();
+        return false;
+    }
+
     LoadOptional(handle_, "retro_set_controller_port_device", retro_set_controller_port_device);
     LoadOptional(handle_, "retro_serialize_size", retro_serialize_size);
     LoadOptional(handle_, "retro_serialize", retro_serialize);

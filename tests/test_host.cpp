@@ -7,7 +7,8 @@
 // They cover:
 //   * software lifecycle: options, frames, audio, input, savestates
 //   * hardware rejections: unsupported API (Vulkan) and failing backend
-//   * hardware lifecycle: context_reset/context_destroy and preferred renderer
+//   * hardware lifecycle: context_reset/context_destroy, preferred renderer and
+//     the context_destroy -> retro_unload_game ordering when closing a game
 //
 // Usage: almenemu_tests <path-to-fake-libretro-core>
 
@@ -282,6 +283,9 @@ void TestSoftwareLifecycle(const fs::path& core_path) {
         return;
     }
 
+    Check(fixture->core.retro_api_version() == RETRO_API_VERSION,
+          "la API libretro del core no es la que espera el frontend");
+
     // Core options (SET_CORE_OPTIONS_V2).
     const auto& options = fixture->host.Options();
     const auto scale = options.find("fake_video_scale");
@@ -364,6 +368,7 @@ void TestSoftwareLifecycle(const fs::path& core_path) {
     CheckEqual(stats->unload_calls, 1, "retro_unload_game");
     CheckEqual(stats->context_destroy_calls, 0,
                "context_destroy no debe invocarse en modo software");
+    CheckEqual(stats->destroy_before_unload, 0, "sin contexto hardware no hay destroy");
 
     fixture->host.Shutdown();
     CheckEqual(stats->deinit_calls, 1, "retro_deinit");
@@ -495,9 +500,22 @@ void TestHardwareLifecycle(const fs::path& core_path) {
     CheckEqual(fixture->video.software_frames, 0, "frames software presentados");
     CheckEqual(stats->frames, 2, "frames ejecutados por el core");
 
+    // Regression: closing a game must release the GPU resources the core created
+    // in context_reset, through context_destroy, while the core is still loaded
+    // and before retro_unload_game().
+    fixture->host.UnloadGame();
+    CheckEqual(fixture->video.context_destroy_calls, 1,
+               "context_destroy en el backend al cerrar el juego");
+    CheckEqual(stats->context_destroy_calls, 1,
+               "context_destroy en el core al cerrar el juego");
+    CheckEqual(stats->destroy_before_unload, 1,
+               "context_destroy debe ocurrir antes de retro_unload_game");
+
     fixture->host.Shutdown();
-    CheckEqual(fixture->video.context_destroy_calls, 1, "context_destroy en el backend");
-    CheckEqual(stats->context_destroy_calls, 1, "context_destroy en el core");
+    CheckEqual(fixture->video.context_destroy_calls, 1,
+               "context_destroy no se invoca dos veces");
+    CheckEqual(stats->context_destroy_calls, 1,
+               "context_destroy en el core (una sola vez)");
     CheckEqual(stats->deinit_calls, 1, "retro_deinit");
 
     fixture->core.Unload();

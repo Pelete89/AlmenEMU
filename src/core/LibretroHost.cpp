@@ -211,6 +211,13 @@ bool LibretroHost::LoadGame(const std::filesystem::path& path, std::string& erro
 
 void LibretroHost::UnloadGame() {
     if (core_ != nullptr && game_loaded_) {
+        // libretro calls context_destroy before the frontend tears the context
+        // down, so it must run while the GPU context is current and the core is
+        // still loaded. Azahar frees its renderer here only when the game is
+        // still loaded, so it has to happen before retro_unload_game().
+        if (video_ != nullptr) {
+            video_->DestroyHardwareContext();
+        }
         core_->retro_unload_game();
     }
     game_loaded_ = false;
@@ -351,10 +358,6 @@ void LibretroHost::SetOption(const std::string& key, const std::string& value) {
         variables_dirty_ = true;
         AddLog("Opción '" + key + "' = " + value);
     }
-}
-
-bool LibretroHost::IsOptionAvailable(const std::string& key) const {
-    return options_.find(key) != options_.end();
 }
 
 void LibretroHost::AddLog(std::string message) {
@@ -669,6 +672,11 @@ int16_t LibretroHost::InputStateCallback(unsigned port, unsigned device, unsigne
 }
 
 void LibretroHost::LogCallback(enum retro_log_level level, const char* fmt, ...) {
+    if (fmt == nullptr) {
+        // Some cores call the log callback with a null format string; passing it
+        // to vsnprintf would be undefined behaviour.
+        return;
+    }
     (void)level;
 
     char buffer[2048];
