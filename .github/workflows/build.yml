@@ -9,6 +9,11 @@ on:
 permissions:
   contents: read
 
+# A new push to the same branch/PR cancels the previous run.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: ${{ matrix.name }}
@@ -59,11 +64,41 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install ninja
 
+      # SDL3 and ImGui are pinned in CMakeLists.txt. They are cloned into deps/
+      # and restored from the cache, so CMake never re-downloads ~110 MB per run
+      # (FETCHCONTENT_SOURCE_DIR_* makes FetchContent skip the download step).
+      - name: Restore dependency cache
+        uses: actions/cache@v4
+        with:
+          path: deps
+          key: ${{ runner.os }}-deps-v1-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Populate dependencies
+        shell: bash
+        run: |
+          mkdir -p deps
+          if [ ! -f deps/sdl3/.populated ]; then
+            git clone --depth 1 --branch release-3.4.20 \
+              https://github.com/libsdl-org/SDL.git deps/sdl3
+            touch deps/sdl3/.populated
+          fi
+          if [ ! -f deps/imgui/.populated ]; then
+            git clone --depth 1 --branch v1.93.0 \
+              https://github.com/ocornut/imgui.git deps/imgui
+            touch deps/imgui/.populated
+          fi
+
       - name: Configure
-        run: cmake --preset ${{ matrix.preset }}
+        run: >
+          cmake --preset ${{ matrix.preset }} -DALMENEMU_BUILD_TESTS=ON
+          -DFETCHCONTENT_SOURCE_DIR_SDL3=${{ github.workspace }}/deps/sdl3
+          -DFETCHCONTENT_SOURCE_DIR_IMGUI=${{ github.workspace }}/deps/imgui
 
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }} --parallel
+
+      - name: Test (headless host tests)
+        run: ctest --test-dir build --output-on-failure -C Release
 
       - name: Smoke test (--help)
         shell: bash

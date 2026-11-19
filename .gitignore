@@ -2,6 +2,7 @@
 /build/
 /out/
 /.vs/
+/deps/
 /CMakeUserPresets.json
 
 # Local libretro cores (do not commit binaries)
