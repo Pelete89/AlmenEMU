@@ -87,3 +87,46 @@ add_custom_target(copy_cores ALL
     DEPENDS AlmenEMU
     COMMENT "Copying libretro cores next to AlmenEMU"
 )
+
+# --- Tests -------------------------------------------------------------------
+# Headless integration tests: a fake libretro core plus a stub video backend, so
+# they run in CI without a GPU, a window or a ROM.
+option(ALMENEMU_BUILD_TESTS "Build the fake libretro core and the headless host tests" ON)
+
+if(ALMENEMU_BUILD_TESTS)
+    enable_testing()
+
+    add_library(almenemu_fake_core MODULE tests/fake_core/fake_core.cpp)
+    set_target_properties(almenemu_fake_core PROPERTIES
+        PREFIX ""
+        OUTPUT_NAME "fake_libretro"
+    )
+    target_include_directories(almenemu_fake_core PRIVATE
+        third_party/libretro/include
+        tests/fake_core
+    )
+
+    add_executable(almenemu_tests
+        tests/test_host.cpp
+        src/core/LibretroCore.cpp
+        src/core/LibretroHost.cpp
+    )
+    target_include_directories(almenemu_tests PRIVATE
+        src
+        third_party/libretro/include
+        tests/fake_core
+    )
+    target_link_libraries(almenemu_tests PRIVATE SDL3::SDL3-static ${CMAKE_DL_LIBS})
+    target_compile_definitions(almenemu_tests PRIVATE SDL_MAIN_HANDLED)
+    add_dependencies(almenemu_tests almenemu_fake_core)
+
+    if(MSVC)
+        target_compile_options(almenemu_fake_core PRIVATE /W4 /permissive- /utf-8)
+        target_compile_options(almenemu_tests PRIVATE /W4 /permissive- /utf-8)
+    else()
+        target_compile_options(almenemu_fake_core PRIVATE -Wall -Wextra -Wpedantic)
+        target_compile_options(almenemu_tests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+    add_test(NAME host_tests COMMAND almenemu_tests $<TARGET_FILE:almenemu_fake_core>)
+endif()
