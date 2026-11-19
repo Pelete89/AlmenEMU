@@ -32,7 +32,9 @@ public:
     void OnHardwareFrame(unsigned width, unsigned height) override;
     void ResizeFramebuffer(unsigned width, unsigned height) override;
 
-    uintptr_t TextureId() const override { return texture_; }
+    // No frame yet -> no texture to show, so the UI can display the waiting
+    // message instead of a black rectangle.
+    uintptr_t TextureId() const override { return has_frame_ ? texture_ : 0; }
     void GetTextureUVs(float& u0, float& v0, float& u1, float& v1) const override;
     void BindDefaultFramebuffer() override;
 
