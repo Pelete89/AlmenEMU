@@ -8,6 +8,12 @@ y el versionado usa [Semantic Versioning](https://semver.org/lang/es/).
 
 ### Added
 
+- Core libretro simulado (`tests/fake_core`) y tests headless del host
+  (`tests/test_host.cpp`) registrados en CTest como `host_tests`.
+- La CI ejecuta `ctest` en Linux, Windows y macOS además del build y el smoke test.
+- La CI cachea SDL3 e ImGui con `actions/cache` (clonados en `deps/`) y cancela runs
+  obsoletos mediante `concurrency`.
+- Opción CMake `ALMENEMU_BUILD_TESTS` (ON por defecto).
 - Plan de implementación completo en `docs/PLAN.md`.
 - Backlog priorizado, hitos, criterios de release y checklist GPL.
 - Revisión 1.1 del plan: gates alineados, matriz de plataformas/core macOS,
@@ -20,11 +26,26 @@ y el versionado usa [Semantic Versioning](https://semver.org/lang/es/).
 
 ### Changed
 
+- `SET_HW_RENDER` solo acepta contextos OpenGL de escritorio; cualquier otra API
+  (Vulkan, GLES, D3D) se rechaza y el core cae a software.
+- La petición de hardware solo se marca como aceptada si el backend la admite, así que un
+  backend que falle ya no aborta el fallback software.
+- `GET_PREFERRED_HW_RENDER` respeta `--software` y el hardware deshabilitado.
+- `context_destroy` del core se invoca al cerrar la app, con el contexto GL current, antes
+  de `retro_deinit()`.
 - README enlaza el plan y el estado del proyecto.
 - Normalización de finales de línea con `.gitattributes`.
 - La UI deja de usar `SDL_Renderer`; usa un contexto OpenGL 4.3/4.1/3.3.
 - Vsync desactivado y frame limiter a ~60 Hz para evitar la caída a 30 Hz.
 - El FBO se dimensiona con la resolución base actual, no con el máximo teórico.
+
+### Fixed
+
+- Doble free al cerrar: `SDL_GetBasePath()` devuelve un buffer cacheado por SDL3 (lo libera
+  `SDL_Quit()`), así que ya no se pasa a `SDL_free()`.
+- El fallback software ya no se cancela cuando el core pide hardware y el backend lo
+  rechaza (antes se llamaba a `context_reset` sin callback válido y se descargaba el juego).
+- `context_destroy` no se llamaba nunca: los recursos GL del core se liberan al cerrar.
 
 ## [0.1.0] - 2026-11-10
 

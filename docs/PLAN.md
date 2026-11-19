@@ -1,8 +1,10 @@
 # Plan de implementación de AlmenEMU
 
-> **Versión del plan:** 1.2
-> **Fecha:** 2026-11-10
+> **Versión del plan:** 1.3
+> **Fecha:** 2026-11-19
 > **Estado:** vivo; se actualiza al cerrar cada hito.
+> **Revisión 1.3:** cerrado el P0 de robustez: fallback de render hardware, `context_destroy`,
+> doble free de SDL3 al cerrar, tests headless con core simulado y CI con `ctest`.
 > **Revisión 1.2:** M2 (OpenGL 4.3) implementado y verificado en Windows; Linux pendiente de CI.
 > **Licencia del proyecto:** GPL-3.0-or-later.
 > **Documento relacionado:** [`docs/ARCHITECTURE.md`](ARCHITECTURE.md).
@@ -105,7 +107,8 @@ estimaciones de este documento son indicativas, no compromisos de fecha.
 | Recientes | Completo | `config/recent.txt`, máx. 12 |
 | Diálogos y drag & drop | Completo | SDL3 file dialog + `SDL_EVENT_DROP_FILE` |
 | Documentación | Completo (base) | README, ARCHITECTURE, PLAN, CHANGELOG, THIRD_PARTY_NOTICES |
-| Verificación funcional | Completo en Windows | Azahar 2126.2 + Universal-Updater 3.4.1 `.3dsx`; OpenGL 4.3 hardware; Linux/macOS pendientes |
+| Tests del host | Completo | Core simulado + CTest (`host_tests`), 80 comprobaciones sin GPU |
+| Verificación funcional | Completo en Windows | Azahar 2126.2 + Universal-Updater 3.4.1 `.3dsx`; OpenGL 4.3 hardware; Linux verificado en build + tests headless; macOS pendiente |
 
 ### 3.2 Hitos cerrados
 
@@ -146,15 +149,16 @@ estimaciones de este documento son indicativas, no compromisos de fecha.
 ### 3.3 Limitaciones conocidas del MVP
 
 - macOS sigue en render software hasta M3 (Vulkan/MoltenVK).
-- Linux está implementado pero pendiente de verificación en CI/VM.
+- Linux compila y pasa los tests headless (Mesa/LLVM, core simulado), pero falta validar
+  Azahar real y obtener CI en verde.
 - El touchscreen y el C-Stick no están mapeados por completo.
 - Vsync está desactivado; el frame limiter usa `SDL_DelayPrecise`.
 - No hay shaders ni escalado entero configurables.
 - No hay persistencia de opciones del core ni configuración por juego.
 - No hay biblioteca con carátulas/metadatos.
-- No hay empaquetado, CI ni releases.
+- La CI compila y ejecuta tests; no hay empaquetado ni releases.
 - La app aún no tiene icono, versión visible en binario ni actualizador.
-- No se ha probado en Linux ni macOS desde este entorno.
+- No se ha probado con Azahar real en Linux ni en macOS desde este entorno.
 - El soporte `.cia` depende de las claves del core y no se ha validado con un título propio.
 
 ---
@@ -177,8 +181,10 @@ estimaciones de este documento son indicativas, no compromisos de fecha.
    ajustes de vídeo deben sobrevivir al reinicio.
 4. **Input táctil**: la pantalla inferior es parte esencial de la 3DS.
 5. **Biblioteca**: escaneo de carpetas, búsqueda, favoritos y carátulas.
-6. **Distribución**: instaladores, firma, notarización, AppImage/Flatpak y CI.
-7. **Calidad**: tests automatizados, core simulado para CI, matriz de compatibilidad.
+6. **Distribución**: instaladores, firma, notarización, AppImage/Flatpak. La CI de build y
+   tests ya existe; falta empaquetado y releases.
+7. **Calidad**: matriz de compatibilidad y ampliar los tests (hoy cubren el host con un
+   core simulado; el core simulado ya está implementado).
 
 ---
 
@@ -191,8 +197,11 @@ src/
   app/Application.*      ventana, UI, input, hotkeys, biblioteca simple
   core/LibretroCore.*    carga dinámica del core
   core/LibretroHost.*    environment, vídeo, audio, input, opciones
+  video/OpenGLBackend.*  FBO y render hardware/software
   main.cpp
 third_party/libretro/    cabecera MIT
+tests/fake_core/         core libretro simulado
+tests/test_host.cpp      tests headless del host (CTest)
 ```
 
 ### 5.2 Estructura propuesta para v1.0
@@ -571,13 +580,17 @@ Una tarea se considera terminada cuando:
 
 ### 9.2 Core simulado para CI
 
+**Estado: implementado** en `tests/fake_core` (ver [`ARCHITECTURE.md`](ARCHITECTURE.md#tests)).
+
 Para no depender de ROMs ni de Azahar en CI:
 
-- Implementar un core libretro mínimo (`tests/mock_core`).
-- Expone `retro_init`, `retro_load_game`, `retro_run`, vídeo y audio.
-- Genera un patrón de color y un tono determinista.
-- Permite probar: carga, callbacks, formatos de píxel, audio, savestates y errores.
-- Se compila como `.dll`/`.so`/`.dylib` y se carga con el mismo `LibretroCore`.
+- [x] Implementar un core libretro mínimo (`tests/fake_core`).
+- [x] Expone `retro_init`, `retro_load_game`, `retro_run`, vídeo y audio.
+- [x] Genera un patrón de color y un tono determinista.
+- [x] Permite probar: carga, callbacks, formatos de píxel, audio, savestates y errores de
+      render hardware (Vulkan rechazado, backend que rechaza OpenGL).
+- [x] Se compila como `.dll`/`.so`/`.dylib` y se carga con el mismo `LibretroCore`.
+- [x] Se ejecuta con CTest (`host_tests`) en la CI de las tres plataformas.
 
 ### 9.3 Matriz manual mínima
 
@@ -602,7 +615,8 @@ Para no depender de ROMs ni de Azahar en CI:
 
 - No descargar ROMs comerciales ni BIOS.
 - El smoke test usa un homebrew de código abierto o el core simulado.
-- Cachear dependencias de CMake/FetchContent cuando sea posible.
+- Las dependencias de FetchContent (SDL3, ImGui) se cachean en `deps/` con
+  `actions/cache` y se pasan a CMake con `FETCHCONTENT_SOURCE_DIR_*`.
 - Ejecutar en PR y en `main`; releases solo desde tags.
 - Guardar logs y artefactos de test fallidos.
 
@@ -858,12 +872,13 @@ corre a velocidad completa y la UI no se degrada; el fallback software sigue ope
 | Audio init | ✅ | SDL3, 32.768 Hz |
 | Savestate `F5`/`F9` | ✅ | Guardado y restaurado en hardware |
 | Captura `F12` | ✅ | BMP desde FBO (400x480) |
-| Linux/macOS | ⏳ | Pendiente de CI/VM |
+| Linux/macOS | ⏳ | CI pendiente de ejecutarse; macOS sigue en render software (M3) |
 | Render hardware OpenGL 4.3 | ✅ | Windows, AMD Radeon 780M; core 60 fps / UI 60 Hz |
 | Fallback `--software` | ✅ | Windows; core ~44 fps / UI ~11 Hz |
 | Savestate carga | ✅ | Windows, hardware; estado restaurado |
 | Captura FBO hardware | ✅ | Windows; BMP 400x480 correcto |
-| Linux | ⏳ | Pendiente de CI/VM |
+| Linux | ✅ | GCC 15.3 + SDL3 3.4.14 del sistema + Mesa: build completo, tests headless
+  80/0 y `--help`; Azahar real pendiente |
 | Vulkan/macOS | ⏳ | M3 |
 
 ---
@@ -880,3 +895,4 @@ los gates de release y el backlog; los cambios se registran en `CHANGELOG.md`.*
 | 1.0 | 2026-11-10 | Plan inicial: alcance, estado, hitos, backlog, riesgos y Git. |
 | 1.1 | 2026-11-10 | Revisión completa: gates de release alineados con hitos; matriz de plataformas/core; core universal macOS; dependencias entre hitos; onboarding mínimo; tareas de pin/hash, savestate atómico, SBOM, accesibilidad de CI y documentación; decisiones abiertas (ADR). |
 | 1.2 | 2026-11-10 | M2 implementado: backend OpenGL 4.3, FBO, fallback software, `--software`, captura FBO, frame pacing y verificación en Windows. Linux/macOS pendientes. |
+| 1.3 | 2026-11-19 | P0 cerrado: `SET_HW_RENDER` validado (solo OpenGL de escritorio), fallback software sin `context_reset` forzado, `context_destroy` al cerrar, doble free de SDL3 corregido, core simulado + `host_tests` en CTest y CI con `ctest` y caché de dependencias. Linux verificado en build + tests headless. |

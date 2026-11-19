@@ -5,8 +5,11 @@ Usa como motor el core **libretro de Azahar** (GPL-3.0) y añade una interfaz pr
 gestión de biblioteca, opciones del core, audio, mandos y savestates.
 
 > Estado: **M2 implementado**. Render hardware **OpenGL 4.3** en Windows/Linux
-> (verificado en Windows) y fallback software. macOS seguirá usando software hasta M3
-> (Vulkan + MoltenVK).
+> (verificado en Windows y en Linux headless con un core simulado) y fallback software.
+> macOS seguirá usando software hasta M3 (Vulkan + MoltenVK).
+>
+> El host libretro tiene **tests de integración headless** (`ctest`) con un core simulado:
+> no necesitan GPU, ventana ni ROM.
 >
 > Plan completo, backlog y criterios de release: [`docs/PLAN.md`](docs/PLAN.md).
 
@@ -26,6 +29,7 @@ gestión de biblioteca, opciones del core, audio, mandos y savestates.
 - Lista de recientes persistente.
 - Arrastrar y soltar ROMs o cores sobre la ventana.
 - Diálogos nativos de archivo con SDL3.
+- Tests headless del host libretro con un core simulado (`ctest`).
 
 ## Requisitos
 
@@ -73,6 +77,22 @@ También puedes usar los presets:
 cmake --preset windows   # o linux / macos
 cmake --build --preset windows
 ```
+
+### Tests
+
+Los tests del host no necesitan GPU, ventana, ROM ni el core de Azahar: usan un core
+libretro simulado (`tests/fake_core`) y un backend de vídeo de prueba.
+
+```bash
+cmake --preset linux -DALMENEMU_BUILD_TESTS=ON
+cmake --build --preset linux --parallel
+ctest --test-dir build --output-on-failure -C Release
+```
+
+Cubren el ciclo de vida software (opciones, vídeo, audio, input y savestates), el rechazo
+de contextos no OpenGL (Vulkan), el fallback software cuando el backend rechaza el render
+hardware y el ciclo `context_reset`/`context_destroy`. Se pueden desactivar con
+`-DALMENEMU_BUILD_TESTS=OFF`.
 
 ## Instalar el core Azahar
 
@@ -145,6 +165,7 @@ src/
 third_party/libretro/    cabecera MIT de libretro
 cores/                   cores locales (ignorados por git)
 scripts/fetch_core.py    descarga del core Azahar
+tests/                   core simulado y tests headless del host
 docs/                    capturas y documentación
 ```
 
@@ -153,7 +174,9 @@ docs/                    capturas y documentación
 - [x] Carga de core y ROM.
 - [x] Render software, audio, teclado, mando, savestates y capturas.
 - [x] Opciones del core y lista de recientes.
-- [x] Render hardware OpenGL 4.3 en Windows/Linux (verificado en Windows; Linux pendiente de CI).
+- [x] Render hardware OpenGL 4.3 en Windows/Linux (verificado en Windows y en Linux
+  headless; falta validar Azahar real en Linux).
+- [x] Tests headless del host con core simulado y CI que ejecuta `ctest`.
 - [ ] Render Vulkan 1.1 + MoltenVK en macOS.
 - [ ] Touchscreen y C-Stick completos.
 - [ ] Configuración por juego y perfiles de mandos.
@@ -161,14 +184,16 @@ docs/                    capturas y documentación
 - [ ] Shaders y escalado entero.
 - [ ] Empaquetado: MSI/ZIP, AppImage/Flatpak, DMG universal.
 - [ ] Firma y notarización en macOS (entitlement JIT para Dynarmic).
-- [ ] CI multiplataforma y releases.
+- [ ] Empaquetado y releases (la CI de build + tests ya existe).
 
 ## Notas técnicas
 
-- El core de Azahar usa `RETRO_ENVIRONMENT_SET_HW_RENDER`. El frontend crea el contexto,
-  entrega un FBO propio mediante `get_current_framebuffer`, llama a `context_reset` tras
-  `retro_load_game` y presenta el FBO con ImGui. El renderer software sube el framebuffer
-  del core a una textura.
+- El core de Azahar usa `RETRO_ENVIRONMENT_SET_HW_RENDER`. El frontend solo acepta
+  contextos OpenGL de escritorio (`RETRO_HW_CONTEXT_OPENGL_CORE`/`OPENGL`); cualquier otra
+  API se rechaza y el core cae a software. Crea el contexto, entrega un FBO propio mediante
+  `get_current_framebuffer`, llama a `context_reset` tras `retro_load_game` y presenta el
+  FBO con ImGui. Al cerrar, invoca `context_destroy` antes de `retro_deinit`. El renderer
+  software sube el framebuffer del core a una textura.
 - El contexto de UI pide OpenGL 4.3, con fallback a 4.1/3.3. Si no hay 4.3, el core se
   fuerza a `Software`.
 - Vsync está desactivado y el bucle se limita a ~60 Hz con `SDL_DelayPrecise`; así se

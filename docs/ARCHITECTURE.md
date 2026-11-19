@@ -62,6 +62,16 @@ La app crea un contexto **OpenGL 4.3 core** (con fallback a 4.1/3.3) y usa
   activa.
 - `context_destroy` no se invoca al cambiar de juego: el contexto OpenGL es propiedad de
   la app y se destruye al cerrar. El core libera sus recursos en `retro_unload_game()`.
+- Al cerrar la app sí se llama `context_destroy` (una sola vez, con el contexto GL current)
+  antes de `retro_deinit()`, que es cuando el core debe liberar sus recursos GL.
+- `SET_HW_RENDER` solo se acepta para `RETRO_HW_CONTEXT_OPENGL_CORE` u `OPENGL`. Si el core
+  pide Vulkan, GLES o D3D se devuelve `false` y el core cae a software; el frontend no le
+  entrega callbacks de FBO OpenGL para un contexto que no es OpenGL.
+- `hw_render_requested_` solo se marca cuando el backend acepta la petición. Si el backend
+  falla (FBO incompleto, sin OpenGL 4.3), el core sigue en software y `LoadGame` no fuerza
+  un `context_reset` condenado a fallar.
+- `GET_PREFERRED_HW_RENDER` devuelve `OPENGL_CORE` solo si el hardware está habilitado
+  (respeta `--software`); si no, devuelve `NONE`.
 
 ### Fallback software
 
@@ -133,8 +143,9 @@ Las opciones se guardan en un `std::map` con valores y etiquetas. La UI las agru
 categoría y las muestra como combos. Al cambiar una opción se marca
 `variables_dirty_`; el core la relee en el siguiente `retro_run`.
 
-Para el MVP se fuerza `citra_graphics_api=Software` antes de `retro_load_game`, porque el
-renderer hardware aún no está implementado.
+Antes de `retro_load_game`, `ConfigureGraphicsApi()` fuerza `citra_graphics_api=OpenGL`
+cuando hay OpenGL 4.3 y el hardware está habilitado, y `Software` en caso contrario (sin
+4.3 o con `--software`). Si el core no expone la clave, se respeta su valor por defecto.
 
 ## Directorios de datos
 
@@ -153,6 +164,27 @@ states/       savestates de AlmenEMU
 screenshots/  capturas BMP
 config/       recent.txt
 ```
+
+## Tests
+
+`tests/fake_core` implementa un core libretro mínimo que no emula nada: expone opciones
+(`SET_CORE_OPTIONS_V2`), pide render hardware según `ALMENEMU_FAKE_HW`
+(`none`/`opengl`/`vulkan`/`auto`), entrega frames XRGB8888 o `RETRO_HW_FRAME_BUFFER_VALID`,
+produce audio/input y soporta savestates. Publica sus contadores vía
+`retro_get_memory_data(RETRO_MEMORY_SYSTEM_RAM)`, así que los tests comprueban lo que el
+core observó de verdad (por ejemplo, si `context_reset`/`context_destroy` se llamaron).
+
+`tests/test_host.cpp` inyecta un `VideoBackend` de prueba (sin GPU) en `LibretroHost` y
+cubre:
+
+1. Ciclo software: opciones, frames, audio, input, savestate y estado corrupto.
+2. Rechazo de `SET_HW_RENDER` con contexto Vulkan.
+3. Backend que rechaza el hardware y el juego continúa en software (regresión).
+4. Ciclo hardware: `GET_PREFERRED_HW_RENDER`, `context_reset` y `context_destroy`.
+5. `GET_PREFERRED_HW_RENDER` con el hardware deshabilitado (`--software`).
+
+Se registran en CTest como `host_tests` y corren en CI en las tres plataformas. No
+requieren ventana, OpenGL, ROM ni el core de Azahar.
 
 ## Empaquetado
 
