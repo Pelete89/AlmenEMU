@@ -9,14 +9,18 @@
 //   * hardware rejections: unsupported API (Vulkan) and failing backend
 //   * hardware lifecycle: context_reset/context_destroy, preferred renderer and
 //     the context_destroy -> retro_unload_game ordering when closing a game
+//   * the framebuffer policy: a grow-only FBO that has to be recreated must be
+//     reported to the core with context_reset on the next frame
 //
 // Usage: almenemu_tests <path-to-fake-libretro-core>
 
 #include "core/LibretroCore.h"
 #include "core/LibretroHost.h"
+#include "video/PixelConversion.h"
 #include "video/VideoBackend.h"
 
 #include "fake_core_api.h"
+#include "test_common.h"
 
 #include <SDL3/SDL.h>
 
@@ -33,39 +37,10 @@ namespace fs = std::filesystem;
 
 namespace {
 
-int g_checks = 0;
-int g_failures = 0;
-
-void Check(bool condition, const std::string& message) {
-    ++g_checks;
-    if (!condition) {
-        ++g_failures;
-        std::fprintf(stderr, "  FAIL: %s\n", message.c_str());
-    }
-}
-
-void CheckEqual(long long actual, long long expected, const std::string& what) {
-    Check(actual == expected, what + ": esperado " + std::to_string(expected) + ", obtenido " +
-                                  std::to_string(actual));
-}
-
-void CheckNear(double actual, double expected, double tolerance, const std::string& what) {
-    Check(std::fabs(actual - expected) <= tolerance,
-          what + ": esperado ~" + std::to_string(expected) + ", obtenido " +
-              std::to_string(actual));
-}
-
-void SetEnv(const char* name, const char* value) {
-#if defined(_WIN32)
-    _putenv_s(name, value != nullptr ? value : "");
-#else
-    if (value != nullptr) {
-        setenv(name, value, 1);
-    } else {
-        unsetenv(name);
-    }
-#endif
-}
+using tests::Check;
+using tests::CheckEqual;
+using tests::CheckNear;
+using tests::SetEnv;
 
 // VideoBackend stub: records what the host does and simulates hardware support
 // on demand. It never touches a GPU.
@@ -83,6 +58,10 @@ public:
     int resize_calls = 0;
     int context_reset_calls = 0;
     int context_destroy_calls = 0;
+
+    unsigned framebuffer_width = 0;
+    unsigned framebuffer_height = 0;
+    bool pending_context_reset = false;
 
     unsigned last_width = 0;
     unsigned last_height = 0;
@@ -103,6 +82,9 @@ public:
         context_ready = false;
         hardware = false;
         has_frame = false;
+        pending_context_reset = false;
+        framebuffer_width = 0;
+        framebuffer_height = 0;
     }
 
     bool SupportsHardware() const override { return supports_hardware; }
@@ -136,6 +118,7 @@ public:
         ++context_reset_calls;
         hardware = true;
         context_ready = true;
+        pending_context_reset = false;
         if (core_callback->context_reset != nullptr) {
             core_callback->context_reset();
         }
@@ -169,10 +152,21 @@ public:
     }
 
     void ResizeFramebuffer(unsigned width, unsigned height) override {
-        (void)width;
-        (void)height;
         ++resize_calls;
+
+        // Same policy as the real backend: the framebuffer only grows, and recreating it
+        // while the core is drawing invalidates its resources.
+        if (video::FramebufferNeedsReallocation(framebuffer_width, framebuffer_height, width,
+                                                height)) {
+            framebuffer_width = width;
+            framebuffer_height = height;
+            if (context_ready) {
+                pending_context_reset = true;
+            }
+        }
     }
+
+    bool NeedsContextReset() const override { return pending_context_reset; }
 
     uintptr_t TextureId() const override { return has_frame ? 1 : 0; }
 
@@ -192,13 +186,21 @@ public:
 
     const char* Name() const override { return hardware ? "Stub (hardware)" : "Stub (software)"; }
 
-    bool ReadPixels(std::vector<uint32_t>& pixels, int& width, int& height) override {
+    bool ReadPixels(std::vector<uint8_t>& pixels, int& width, int& height) override {
         if (!has_frame || last_width == 0 || last_height == 0) {
+            pixels.clear();
             return false;
         }
         width = static_cast<int>(last_width);
         height = static_cast<int>(last_height);
-        pixels.assign(static_cast<size_t>(width) * height, 0xFF202020u);
+        // Same contract as the real backend: RGBA8 bytes, top-down, tightly packed.
+        pixels.assign(static_cast<size_t>(width) * height * 4, 0);
+        for (size_t i = 0; i < pixels.size(); i += 4) {
+            pixels[i] = 0x20;
+            pixels[i + 1] = 0x20;
+            pixels[i + 2] = 0x20;
+            pixels[i + 3] = 0xFF;
+        }
         return true;
     }
 
@@ -500,6 +502,21 @@ void TestHardwareLifecycle(const fs::path& core_path) {
     CheckEqual(fixture->video.software_frames, 0, "frames software presentados");
     CheckEqual(stats->frames, 2, "frames ejecutados por el core");
 
+    // Readback is the base of captures (F12) and of the hardware path: the contract is
+    // RGBA8 bytes, top-down, tightly packed (width * 4).
+    std::vector<uint8_t> pixels;
+    int read_width = 0;
+    int read_height = 0;
+    Check(fixture->video.ReadPixels(pixels, read_width, read_height),
+          "readback del backend con un frame hardware activo");
+    CheckEqual(read_width, fake_core::kWidth, "ancho informado por el readback");
+    CheckEqual(read_height, fake_core::kHeight, "alto informado por el readback");
+    CheckEqual(static_cast<long long>(pixels.size()),
+               static_cast<long long>(read_width) * read_height * 4,
+               "readback RGBA8: cuatro bytes por píxel");
+    CheckEqual(pixels[0], 0x20, "readback: primer píxel tiene canal R");
+    CheckEqual(pixels[3], 0xFF, "readback: alfa opaco");
+
     // Regression: closing a game must release the GPU resources the core created
     // in context_reset, through context_destroy, while the core is still loaded
     // and before retro_unload_game().
@@ -554,6 +571,90 @@ void TestPreferredHardwareDisabled(const fs::path& core_path) {
     fixture->stats = nullptr;
 }
 
+void TestFramebufferGrowth(const fs::path& core_path) {
+    std::printf("[6] FBO grow-only y aviso al core tras SET_GEOMETRY\n");
+    SetEnv("ALMENEMU_FAKE_HW", "auto");
+    SetEnv("ALMENEMU_FAKE_GEOMETRY", "800x480");
+
+    auto fixture = MakeFixture("framebuffer-growth", core_path);
+    fixture->video.supports_hardware = true;
+    fixture->host.SetHardwareEnabled(true);
+
+    std::string error;
+    if (!fixture->Init(error)) {
+        Check(false, "no se pudo inicializar el host: " + error);
+        return;
+    }
+    fake_core::Stats* stats = fixture->Stats();
+    if (stats == nullptr) {
+        Check(false, "el core simulado no expone estadísticas");
+        return;
+    }
+
+    Check(fixture->host.LoadGame(fixture->rom, error), "LoadGame falló: " + error);
+
+    // LoadGame sizes the framebuffer with the base resolution before context_reset, so
+    // there is nothing to notify.
+    CheckEqual(fixture->video.framebuffer_width, fake_core::kWidth, "FBO con la resolución base");
+    CheckEqual(fixture->video.framebuffer_height, fake_core::kHeight,
+               "FBO con la resolución base (alto)");
+    Check(!fixture->video.NeedsContextReset(), "la primera asignación no requiere aviso");
+
+    // The core grows its internal resolution during retro_run(). The host cannot call
+    // context_reset() from inside the environment callback, so it defers it.
+    fixture->host.RunFrame();
+    CheckEqual(stats->geometry_calls, 1, "SET_GEOMETRY durante retro_run");
+    CheckEqual(fixture->video.context_reset_calls, 1,
+               "context_reset no se llama dentro del callback de entorno");
+    Check(fixture->video.NeedsContextReset(), "un FBO recrecido debe avisar al core");
+    CheckEqual(fixture->video.framebuffer_width, 800, "el FBO crece, no se queda recortado");
+    CheckEqual(fixture->video.framebuffer_height, 480, "el FBO crece (alto)");
+
+    // On the next frame the core is told to rebuild its resources.
+    fixture->host.RunFrame();
+    CheckEqual(fixture->video.context_reset_calls, 2, "context_reset en el frame siguiente");
+    CheckEqual(stats->context_reset_calls, 2, "el core recibió el aviso");
+    Check(!fixture->video.NeedsContextReset(), "el aviso se consume al atenderse");
+
+    // A frame smaller than the current framebuffer must not reallocate it.
+    SetEnv("ALMENEMU_FAKE_GEOMETRY", "400x240");
+    fixture->host.RunFrame();
+    CheckEqual(fixture->video.context_reset_calls, 2, "un frame menor no recrea el FBO");
+    CheckEqual(fixture->video.framebuffer_width, 800, "el FBO conserva el tamaño alcanzado");
+
+    fixture->host.UnloadGame();
+    CheckEqual(stats->context_destroy_calls, 1, "context_destroy al cerrar el juego");
+    fixture->host.Shutdown();
+    CheckEqual(stats->deinit_calls, 1, "retro_deinit");
+
+    // In software mode there is no core GPU context, so a growth is not a reset.
+    auto software = MakeFixture("framebuffer-growth-software", core_path);
+    software->video.supports_hardware = false;
+    software->host.SetHardwareEnabled(false);
+    SetEnv("ALMENEMU_FAKE_HW", "none");
+    SetEnv("ALMENEMU_FAKE_GEOMETRY", "800x480");
+
+    if (!software->Init(error)) {
+        Check(false, "no se pudo inicializar el host (software): " + error);
+        return;
+    }
+    fake_core::Stats* software_stats = software->Stats();
+    if (software_stats == nullptr) {
+        Check(false, "el core simulado no expone estadísticas (software)");
+        return;
+    }
+
+    Check(software->host.LoadGame(software->rom, error), "LoadGame (software) falló: " + error);
+    software->host.RunFrame();
+    CheckEqual(software_stats->geometry_calls, 1, "SET_GEOMETRY en software");
+    CheckEqual(software->video.framebuffer_width, 800, "el FBO software también crece");
+    Check(!software->video.NeedsContextReset(), "en software no hay contexto que resetear");
+    CheckEqual(software->video.context_reset_calls, 0, "context_reset no se llama en software");
+
+    software->host.Shutdown();
+    SetEnv("ALMENEMU_FAKE_GEOMETRY", nullptr);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -580,9 +681,10 @@ int main(int argc, char** argv) {
     TestBackendRejectsHardware(core_path);
     TestHardwareLifecycle(core_path);
     TestPreferredHardwareDisabled(core_path);
+    TestFramebufferGrowth(core_path);
 
     SDL_Quit();
 
-    std::printf("\n%d comprobaciones, %d fallos\n", g_checks, g_failures);
-    return g_failures == 0 ? 0 : 1;
+    std::printf("\n%d comprobaciones, %d fallos\n", tests::checks, tests::failures);
+    return tests::failures == 0 ? 0 : 1;
 }

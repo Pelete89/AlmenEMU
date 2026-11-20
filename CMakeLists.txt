@@ -55,6 +55,7 @@ add_executable(AlmenEMU
     src/core/LibretroCore.cpp
     src/core/LibretroHost.cpp
     src/video/OpenGLBackend.cpp
+    src/video/PixelConversion.cpp
 )
 
 target_include_directories(AlmenEMU PRIVATE
@@ -110,6 +111,7 @@ if(ALMENEMU_BUILD_TESTS)
         tests/test_host.cpp
         src/core/LibretroCore.cpp
         src/core/LibretroHost.cpp
+        src/video/PixelConversion.cpp
     )
     target_include_directories(almenemu_tests PRIVATE
         src
@@ -128,5 +130,24 @@ if(ALMENEMU_BUILD_TESTS)
         target_compile_options(almenemu_tests PRIVATE -Wall -Wextra -Wpedantic)
     endif()
 
+    # Unit tests for the pure presentation logic (src/video/PixelConversion): no SDL,
+    # no OpenGL, no window, so they build and run everywhere the CI does.
+    add_executable(almenemu_video_tests
+        tests/test_video.cpp
+        src/video/PixelConversion.cpp
+    )
+    target_include_directories(almenemu_video_tests PRIVATE
+        src
+        tests
+        third_party/libretro/include
+    )
+
+    if(MSVC)
+        target_compile_options(almenemu_video_tests PRIVATE /W4 /permissive- /utf-8)
+    else()
+        target_compile_options(almenemu_video_tests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
     add_test(NAME host_tests COMMAND almenemu_tests $<TARGET_FILE:almenemu_fake_core>)
+    add_test(NAME video_tests COMMAND almenemu_video_tests)
 endif()

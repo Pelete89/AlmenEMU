@@ -8,18 +8,6 @@
 #include <cstring>
 #include <type_traits>
 
-namespace {
-
-uint32_t Expand5(uint32_t value) {
-    return (value << 3) | (value >> 2);
-}
-
-uint32_t Expand6(uint32_t value) {
-    return (value << 2) | (value >> 4);
-}
-
-} // namespace
-
 OpenGLBackend* OpenGLBackend::s_active = nullptr;
 
 OpenGLBackend::~OpenGLBackend() {
@@ -69,6 +57,7 @@ void OpenGLBackend::Shutdown() {
     hardware_context_ready_ = false;
     hardware_callback_ = nullptr;
     window_ = nullptr;
+    pending_context_reset_ = false;
     if (s_active == this) {
         s_active = nullptr;
     }
@@ -84,6 +73,7 @@ void OpenGLBackend::Reset() {
     hardware_context_ready_ = false;
     hardware_callback_ = nullptr;
     bottom_left_origin_ = true;
+    pending_context_reset_ = false;
 }
 
 bool OpenGLBackend::LoadFunctions(std::string& error) {
@@ -146,6 +136,7 @@ bool OpenGLBackend::ContextReset(std::string& error) {
     gl_.BindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(previous_fbo));
     hardware_active_ = true;
     hardware_context_ready_ = true;
+    pending_context_reset_ = false;
     SDL_Log("Contexto hardware de Azahar inicializado.");
     return true;
 }
@@ -214,101 +205,40 @@ void OpenGLBackend::ResizeFramebuffer(unsigned width, unsigned height) {
 
 void OpenGLBackend::UploadSoftwarePixels(const void* data, unsigned width, unsigned height,
                                          size_t pitch, retro_pixel_format format) {
-    software_pixels_.resize(static_cast<size_t>(width) * height);
-    const auto* source = static_cast<const uint8_t*>(data);
-    const size_t bytes_per_pixel = format == RETRO_PIXEL_FORMAT_XRGB8888 ? 4 : 2;
-    const size_t source_pitch =
-        pitch != 0 ? pitch : static_cast<size_t>(width) * bytes_per_pixel;
-
-    switch (format) {
-    case RETRO_PIXEL_FORMAT_XRGB8888: {
-        const size_t row_bytes = std::min(source_pitch, static_cast<size_t>(width) * 4);
-        for (unsigned y = 0; y < height; ++y) {
-            std::memcpy(software_pixels_.data() + static_cast<size_t>(y) * width,
-                        source + static_cast<size_t>(y) * source_pitch, row_bytes);
-        }
-        for (auto& pixel : software_pixels_) {
-            pixel |= 0xFF000000u;
-        }
-        break;
-    }
-    case RETRO_PIXEL_FORMAT_RGB565: {
-        for (unsigned y = 0; y < height; ++y) {
-            const auto* row = reinterpret_cast<const uint16_t*>(source + y * source_pitch);
-            for (unsigned x = 0; x < width; ++x) {
-                const uint16_t pixel = row[x];
-                const uint32_t r = Expand5((pixel >> 11) & 0x1F);
-                const uint32_t g = Expand6((pixel >> 5) & 0x3F);
-                const uint32_t b = Expand5(pixel & 0x1F);
-                software_pixels_[static_cast<size_t>(y) * width + x] =
-                    0xFF000000u | (r << 16) | (g << 8) | b;
-            }
-        }
-        break;
-    }
-    case RETRO_PIXEL_FORMAT_0RGB1555: {
-        for (unsigned y = 0; y < height; ++y) {
-            const auto* row = reinterpret_cast<const uint16_t*>(source + y * source_pitch);
-            for (unsigned x = 0; x < width; ++x) {
-                const uint16_t pixel = row[x];
-                const uint32_t r = Expand5((pixel >> 10) & 0x1F);
-                const uint32_t g = Expand5((pixel >> 5) & 0x1F);
-                const uint32_t b = Expand5(pixel & 0x1F);
-                software_pixels_[static_cast<size_t>(y) * width + x] =
-                    0xFF000000u | (r << 16) | (g << 8) | b;
-            }
-        }
-        break;
-    }
-    default:
-        break;
+    if (!video::ConvertFrameToRGBA8(software_pixels_, data, width, height, pitch, format)) {
+        SDL_Log("Formato de píxel no soportado por el backend: %d", static_cast<int>(format));
+        return;
     }
 
+    // GL_RGBA with explicit byte order: GL_BGRA is not a format the core profiles accept,
+    // and that is the only path available on macOS until M3.
     glBindTexture(GL_TEXTURE_2D, texture_);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, static_cast<GLsizei>(width),
-                    static_cast<GLsizei>(height), GL_BGRA, GL_UNSIGNED_BYTE,
+                    static_cast<GLsizei>(height), GL_RGBA, GL_UNSIGNED_BYTE,
                     software_pixels_.data());
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
 void OpenGLBackend::GetTextureUVs(float& u0, float& v0, float& u1, float& v1) const {
-    u0 = 0.0f;
-    v0 = 0.0f;
-    u1 = 1.0f;
-    v1 = 1.0f;
+    // The framebuffer can be larger than the frame (grow-only), so only the region the
+    // core actually filled is sampled.
+    const video::TextureUV uv = video::ComputeTextureUVs(
+        static_cast<unsigned>(framebuffer_width_), static_cast<unsigned>(framebuffer_height_),
+        static_cast<unsigned>(frame_width_), static_cast<unsigned>(frame_height_),
+        hardware_active_, bottom_left_origin_);
 
-    if (framebuffer_width_ <= 0 || framebuffer_height_ <= 0 ||
-        frame_width_ <= 0 || frame_height_ <= 0) {
-        return;
-    }
-
-    const float u_max = std::min(1.0f, static_cast<float>(frame_width_) / framebuffer_width_);
-    const float v_max = std::min(1.0f, static_cast<float>(frame_height_) / framebuffer_height_);
-
-    if (!hardware_active_) {
-        // Software pixels are uploaded top-down into the lower-left region of
-        // the texture. The first row is at v=0, which is the top of the image.
-        u1 = u_max;
-        v1 = v_max;
-        return;
-    }
-
-    if (bottom_left_origin_) {
-        v0 = v_max;
-        v1 = 0.0f;
-    } else {
-        v0 = 0.0f;
-        v1 = v_max;
-    }
-    u1 = u_max;
+    u0 = uv.u0;
+    v0 = uv.v0;
+    u1 = uv.u1;
+    v1 = uv.v1;
 }
 
 void OpenGLBackend::BindDefaultFramebuffer() {
     gl_.BindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
-bool OpenGLBackend::ReadPixels(std::vector<uint32_t>& pixels, int& width, int& height) {
+bool OpenGLBackend::ReadPixels(std::vector<uint8_t>& pixels, int& width, int& height) {
     if (!has_frame_ || frame_width_ <= 0 || frame_height_ <= 0) {
         return false;
     }
@@ -325,24 +255,18 @@ bool OpenGLBackend::ReadPixels(std::vector<uint32_t>& pixels, int& width, int& h
         return false;
     }
 
-    std::vector<uint32_t> raw(static_cast<size_t>(width) * height);
+    std::vector<uint8_t> raw(static_cast<size_t>(width) * height * 4);
     GLint previous_read_fbo = 0;
     glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previous_read_fbo);
     gl_.BindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer_);
     glReadBuffer(GL_COLOR_ATTACHMENT0);
     glPixelStorei(GL_PACK_ALIGNMENT, 4);
-    glReadPixels(0, 0, width, height, GL_BGRA, GL_UNSIGNED_BYTE, raw.data());
+    glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, raw.data());
     gl_.BindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previous_read_fbo));
 
-    pixels.resize(static_cast<size_t>(width) * height);
-    for (int y = 0; y < height; ++y) {
-        const auto* src = raw.data() + static_cast<size_t>(height - 1 - y) * width;
-        auto* dst = pixels.data() + static_cast<size_t>(y) * width;
-        for (int x = 0; x < width; ++x) {
-            dst[x] = src[x] | 0xFF000000u;
-        }
-    }
-    return true;
+    // The readback is bottom-up while a screenshot file is top-down.
+    return video::FlipRowsToTopDown(pixels, raw, static_cast<unsigned>(width),
+                                    static_cast<unsigned>(height));
 }
 
 const char* OpenGLBackend::Name() const {
@@ -350,19 +274,20 @@ const char* OpenGLBackend::Name() const {
 }
 
 bool OpenGLBackend::EnsureFramebuffer(unsigned width, unsigned height, std::string& error) {
-    width = std::max(width, 64u);
-    height = std::max(height, 64u);
+    const unsigned wanted_width = std::max(width, 64u);
+    const unsigned wanted_height = std::max(height, 64u);
 
-    if (framebuffer_ != 0 && width <= static_cast<unsigned>(framebuffer_width_) &&
-        height <= static_cast<unsigned>(framebuffer_height_)) {
+    if (!video::FramebufferNeedsReallocation(static_cast<unsigned>(framebuffer_width_),
+                                             static_cast<unsigned>(framebuffer_height_),
+                                             wanted_width, wanted_height)) {
         return true;
     }
 
     GLint max_texture_size = 0;
     glGetIntegerv(GL_MAX_TEXTURE_SIZE, &max_texture_size);
     if (max_texture_size > 0 &&
-        (width > static_cast<unsigned>(max_texture_size) ||
-         height > static_cast<unsigned>(max_texture_size))) {
+        (wanted_width > static_cast<unsigned>(max_texture_size) ||
+         wanted_height > static_cast<unsigned>(max_texture_size))) {
         error = "El tamaño del FBO supera GL_MAX_TEXTURE_SIZE.";
         return false;
     }
@@ -376,7 +301,16 @@ bool OpenGLBackend::EnsureFramebuffer(unsigned width, unsigned height, std::stri
 
     const GLuint old_framebuffer = framebuffer_;
     const GLuint old_texture = texture_;
+    const bool core_was_drawing = hardware_context_ready_;
     DestroyFramebuffer();
+
+    if (core_was_drawing) {
+        // Recreating the FBO invalidates the texture the core draws into. libretro
+        // allows context_reset() to be called again without a prior context_destroy
+        // precisely for this, so the host tells the core to rebuild its resources on
+        // the next frame (never from inside an environment callback).
+        pending_context_reset_ = true;
+    }
 
     glGenTextures(1, &texture_);
     glBindTexture(GL_TEXTURE_2D, texture_);
@@ -384,8 +318,8 @@ bool OpenGLBackend::EnsureFramebuffer(unsigned width, unsigned height, std::stri
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, static_cast<GLsizei>(width),
-                 static_cast<GLsizei>(height), 0, GL_BGRA, GL_UNSIGNED_BYTE, nullptr);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, static_cast<GLsizei>(wanted_width),
+                 static_cast<GLsizei>(wanted_height), 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
 
     gl_.GenFramebuffers(1, &framebuffer_);
     gl_.BindFramebuffer(GL_FRAMEBUFFER, framebuffer_);
@@ -412,8 +346,8 @@ bool OpenGLBackend::EnsureFramebuffer(unsigned width, unsigned height, std::stri
         return false;
     }
 
-    framebuffer_width_ = static_cast<int>(width);
-    framebuffer_height_ = static_cast<int>(height);
+    framebuffer_width_ = static_cast<int>(wanted_width);
+    framebuffer_height_ = static_cast<int>(wanted_height);
 
     const GLuint restore_texture =
         previous_texture == static_cast<GLint>(old_texture) ? texture_
@@ -428,7 +362,12 @@ bool OpenGLBackend::EnsureFramebuffer(unsigned width, unsigned height, std::stri
     gl_.BindFramebuffer(GL_DRAW_FRAMEBUFFER, restore_draw);
     gl_.BindFramebuffer(GL_READ_FRAMEBUFFER, restore_read);
 
-    SDL_Log("FBO de vídeo: %ux%u", width, height);
+    if (core_was_drawing) {
+        SDL_Log("FBO recrecido a %ux%u: se avisará al core (context_reset).",
+                wanted_width, wanted_height);
+    } else {
+        SDL_Log("FBO de vídeo: %ux%u", wanted_width, wanted_height);
+    }
     return true;
 }
 

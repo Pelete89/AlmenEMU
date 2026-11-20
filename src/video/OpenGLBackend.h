@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "video/PixelConversion.h"
 #include "video/VideoBackend.h"
 
 class OpenGLBackend final : public VideoBackend {
@@ -32,6 +33,10 @@ public:
     void OnHardwareFrame(unsigned width, unsigned height) override;
     void ResizeFramebuffer(unsigned width, unsigned height) override;
 
+    // True when the framebuffer had to be recreated while the core was drawing into
+    // it; the host then calls ContextReset() so the core rebuilds its resources.
+    bool NeedsContextReset() const override { return pending_context_reset_; }
+
     // No frame yet -> no texture to show, so the UI can display the waiting
     // message instead of a black rectangle.
     uintptr_t TextureId() const override { return has_frame_ ? texture_ : 0; }
@@ -44,7 +49,7 @@ public:
     bool IsHardware() const override { return hardware_active_; }
     const char* Name() const override;
 
-    bool ReadPixels(std::vector<uint32_t>& pixels, int& width, int& height) override;
+    bool ReadPixels(std::vector<uint8_t>& pixels, int& width, int& height) override;
 
 private:
     struct Functions {
@@ -83,6 +88,7 @@ private:
     bool has_frame_ = false;
 
     retro_hw_render_callback* hardware_callback_ = nullptr;
-    std::vector<uint32_t> software_pixels_;
+    std::vector<uint8_t> software_pixels_;
+    bool pending_context_reset_ = false;
     std::string driver_name_;
 };

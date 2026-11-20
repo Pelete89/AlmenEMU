@@ -812,7 +812,7 @@ void Application::TakeScreenshot() {
     std::error_code ec;
     std::filesystem::create_directories(screenshots_dir_, ec);
 
-    std::vector<uint32_t> pixels;
+    std::vector<uint8_t> pixels;
     int width = 0;
     int height = 0;
     if (video_ == nullptr || !video_->ReadPixels(pixels, width, height)) {
@@ -821,8 +821,9 @@ void Application::TakeScreenshot() {
     }
 
     const auto path = ScreenshotPath();
+    // The backend returns RGBA8 bytes, which SDL reads without assuming an endianness.
     SDL_Surface* surface = SDL_CreateSurfaceFrom(
-        width, height, SDL_PIXELFORMAT_XRGB8888, pixels.data(), width * 4);
+        width, height, SDL_PIXELFORMAT_RGBA8888, pixels.data(), width * 4);
     if (surface == nullptr) {
         ShowError(std::string("No se pudo crear la captura: ") + SDL_GetError());
         return;

@@ -41,6 +41,13 @@ public:
     virtual void OnHardwareFrame(unsigned width, unsigned height) = 0;
     virtual void ResizeFramebuffer(unsigned width, unsigned height) = 0;
 
+    // A framebuffer is grow-only, so when it has to be recreated the texture the core
+    // draws into changes: its resources are invalidated. libretro allows the frontend
+    // to call context_reset() again without a prior context_destroy exactly for that,
+    // so the core can rebuild them. The host does it between frames, never from inside
+    // an environment callback.
+    virtual bool NeedsContextReset() const { return false; }
+
     virtual uintptr_t TextureId() const = 0;
     virtual void GetTextureUVs(float& u0, float& v0, float& u1, float& v1) const = 0;
     virtual void BindDefaultFramebuffer() = 0;
@@ -51,5 +58,6 @@ public:
     virtual bool IsHardware() const = 0;
     virtual const char* Name() const = 0;
 
-    virtual bool ReadPixels(std::vector<uint32_t>& pixels, int& width, int& height) = 0;
+    // RGBA8 bytes in memory order (R, G, B, A), top-down, tightly packed (width * 4).
+    virtual bool ReadPixels(std::vector<uint8_t>& pixels, int& width, int& height) = 0;
 };

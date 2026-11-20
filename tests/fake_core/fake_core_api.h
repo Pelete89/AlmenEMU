@@ -43,6 +43,7 @@ struct Stats {
     uint32_t save_state_loaded;
     uint32_t input_polls;
     uint32_t input_queries;
+    uint32_t geometry_calls; // SET_GEOMETRY sent during retro_run
     // Set by retro_unload_game() when context_destroy already happened, i.e. the
     // frontend released the GPU resources before telling the core the game ended.
     uint32_t destroy_before_unload;

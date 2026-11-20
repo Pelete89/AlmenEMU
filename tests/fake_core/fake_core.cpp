@@ -11,6 +11,9 @@
 //   opengl request an OpenGL core hardware context
 //   vulkan request a Vulkan hardware context (the frontend must reject it)
 //   auto   request hardware only if GET_PREFERRED_HW_RENDER is not NONE
+//
+// ALMENEMU_FAKE_GEOMETRY=<width>x<height> makes the core send SET_GEOMETRY during
+// retro_run(), which is how a test can ask the frontend to grow its framebuffer.
 
 #include "libretro.h"
 
@@ -50,6 +53,32 @@ struct SaveState {
 const char* HardwareMode() {
     const char* mode = std::getenv("ALMENEMU_FAKE_HW");
     return mode != nullptr ? mode : "none";
+}
+
+// A core that changes its internal resolution sends SET_GEOMETRY at runtime. The host
+// must resize its framebuffer from inside this callback but must not call context_reset()
+// here: it has to do it between frames.
+void RequestGeometry() {
+    const char* geometry = std::getenv("ALMENEMU_FAKE_GEOMETRY");
+    if (g_env == nullptr || geometry == nullptr) {
+        return;
+    }
+
+    unsigned width = 0;
+    unsigned height = 0;
+    if (std::sscanf(geometry, "%ux%u", &width, &height) != 2 || width == 0 || height == 0) {
+        return;
+    }
+
+    retro_game_geometry geom{};
+    geom.base_width = width;
+    geom.base_height = height;
+    geom.max_width = width;
+    geom.max_height = height;
+    geom.aspect_ratio = static_cast<float>(width) / static_cast<float>(height);
+
+    ++g_stats.geometry_calls;
+    g_env(RETRO_ENVIRONMENT_SET_GEOMETRY, &geom);
 }
 
 void ResetStats() {
@@ -229,6 +258,8 @@ RETRO_API void retro_run(void) {
             ++g_stats.scale_2x_seen;
         }
     }
+
+    RequestGeometry();
 
     if (g_input_poll != nullptr) {
         ++g_stats.input_polls;

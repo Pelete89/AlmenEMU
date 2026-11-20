@@ -228,9 +228,29 @@ void LibretroHost::UnloadGame() {
 }
 
 void LibretroHost::RunFrame() {
-    if (initialized_ && game_loaded_ && !paused_ && core_ != nullptr) {
-        core_->retro_run();
+    if (!initialized_ || !game_loaded_ || core_ == nullptr) {
+        return;
     }
+
+    // A framebuffer can only grow, so when it is recreated the texture the core draws
+    // into changes and the resources it created in context_reset() are invalidated.
+    // libretro allows the frontend to call context_reset() again for exactly that, and
+    // it has to happen between frames: never from inside an environment callback.
+    if (video_ != nullptr && video_->NeedsContextReset()) {
+        std::string error;
+        if (!video_->ContextReset(error)) {
+            AddLog("No se pudo avisar al core tras recrecer el FBO: " +
+                   (error.empty() ? "sin mensaje de error" : error));
+            return;
+        }
+        hardware_active_ = video_->IsHardware();
+    }
+
+    if (paused_) {
+        return;
+    }
+
+    core_->retro_run();
 }
 
 void LibretroHost::Reset() {
