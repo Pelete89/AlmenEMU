@@ -80,8 +80,10 @@ cmake --build --preset windows
 
 ### Tests
 
-Los tests del host no necesitan GPU, ventana, ROM ni el core de Azahar: usan un core
-libretro simulado (`tests/fake_core`) y un backend de vídeo de prueba.
+Los tests no necesitan GPU, ventana, ROM ni el core de Azahar: `host_tests` usa un core
+libretro simulado (`tests/fake_core`) y un backend de vídeo de prueba, y `video_tests`
+ comprueba la lógica pura de presentación (`src/video/PixelConversion`: formatos de píxel,
+UVs, orden de filas del readback y política del FBO).
 
 ```bash
 cmake --preset linux -DALMENEMU_BUILD_TESTS=ON
@@ -91,8 +93,10 @@ ctest --test-dir build --output-on-failure -C Release
 
 Cubren el ciclo de vida software (opciones, vídeo, audio, input y savestates), el rechazo
 de contextos no OpenGL (Vulkan), el fallback software cuando el backend rechaza el render
-hardware y el ciclo `context_reset`/`context_destroy`. Se pueden desactivar con
-`-DALMENEMU_BUILD_TESTS=OFF`.
+hardware, el ciclo `context_reset`/`context_destroy` y el readback RGBA8 del backend. Los
+tests de vídeo verifican la expansión de 5 y 6 bits, el pitch acolchado, el recorte de UVs
+con un FBO *grow-only* y que un readback más corto que el frame se rechaza. En total, 166
+comprobaciones. Se pueden desactivar con `-DALMENEMU_BUILD_TESTS=OFF`.
 
 ## Instalar el core Azahar
 

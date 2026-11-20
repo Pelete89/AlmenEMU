@@ -23,6 +23,13 @@ y el versionado usa [Semantic Versioning](https://semver.org/lang/es/).
 - Presentación de la UI con `ImGui_ImplOpenGL3`.
 - Medición de FPS real del core y de la UI.
 - Captura desde el FBO en modo hardware.
+- Lógica pura de presentación extraída a `src/video/PixelConversion` (formatos de píxel,
+  expansión de 5/6 bits, UVs del frame, orden de filas del readback y política del FBO).
+  No depende de OpenGL ni SDL y se compila dentro de la app y de los tests.
+- Tests unitarios de la lógica de vídeo (`tests/test_video.cpp`, registrados en CTest como
+  `video_tests`, 54 comprobaciones) y helpers compartidos en `tests/test_common.h`.
+- El readback del backend se verifica en `host_tests` (RGBA8, cuatro bytes por píxel, alfa
+  opaco, tamaño `width * height * 4`); `host_tests` llega a 112 comprobaciones.
 
 ### Changed
 
@@ -64,6 +71,19 @@ y el versionado usa [Semantic Versioning](https://semver.org/lang/es/).
   render hardware activo, cerrar el juego dejaba los recursos GL del core sin liberar;
   Azahar solo suelta el renderer si el juego sigue cargado, por eso el orden importa.
 - `LogCallback` ya no es UB cuando un core pasa `fmt == nullptr` a `vsnprintf`.
+- `OpenGLBackend::GetTextureUVs()` usaba `TextureUV` sin el namespace `video::` y
+  `PixelConversion.cpp` no estaba en `CMakeLists.txt`: ni la app ni los tests compilaban.
+  El archivo se añade a los targets `AlmenEMU` y `almenemu_tests`.
+- `StubVideo::ReadPixels` no sobrescribía la firma de la interfaz (`std::vector<uint32_t>`
+  frente a `std::vector<uint8_t>`), así que el stub quedaba como clase abstracta y el
+  fixture no se podía instanciar. Ahora implementa el contrato real: RGBA8 apilado.
+- `FlipRowsToTopDown` devuelve `bool` y deja `dst` vacío cuando el readback es más corto que
+  el frame; `ReadPixels` ya no informa éxito con un buffer rellenado a ceros, de modo que
+  una captura vacía se rechaza en lugar de escribir un BMP negro.
+- El test del pitch acolchado crea el buffer con los huecos del padding, así la segunda fila
+  empieza en el byte 12; antes se leía fuera del array y la fila salía descolocada.
+- El test de crecimiento en software fija `ALMENEMU_FAKE_GEOMETRY=800x480` antes de cargar el
+  juego: heredaba `400x240` del paso anterior y el FBO nunca crecía.
 
 ## [0.1.0] - 2026-11-10
 
