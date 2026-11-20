@@ -528,7 +528,7 @@ la documentación permite compilar y usar la app sin ayuda externa.
 | Q-03 | P1 | Core simulado | Core de prueba con vídeo/audio determinista para CI | 3 d |
 | Q-04 | P1 | Matriz de compatibilidad | Plantilla y lista de homebrew/juegos propios | continuo |
 | Q-05 | P1 | Benchmarks | Tiempo de frame, UI Hz, audio underruns, RAM | 2 d |
-| Q-06 | P2 | ASan/UBSan | Pipeline Linux sin errores | 1 d |
+| Q-06 | P2 | ASan/UBSan | Pipeline Linux sin errores | **Hecho** (job `sanitize`) |
 | Q-07 | P2 | Crash handler | Log y minidump local, sin subida automática | 1 d |
 | Q-08 | P2 | Fuzz de configuración | Parser robusto ante archivos corruptos | 1 d |
 | Q-09 | P1 | Auditoría de licencias | Headers SPDX y SBOM en CI | 1 d |
@@ -600,6 +600,8 @@ Para no depender de ROMs ni de Azahar en CI:
       render hardware (Vulkan rechazado, backend que rechaza OpenGL).
 - [x] Se compila como `.dll`/`.so`/`.dylib` y se carga con el mismo `LibretroCore`.
 - [x] Se ejecuta con CTest (`host_tests`) en la CI de las tres plataformas.
+- [x] Se ejecuta bajo ASan + UBSan en el job `sanitize` de la CI (Linux), con el core
+      compilado con las mismas flags para que `libasan.so` reporte desde el `dlopen()`.
 
 ### 9.3 Matriz manual mínima
 
@@ -910,3 +912,4 @@ los gates de release y el backlog; los cambios se registran en `CHANGELOG.md`.*
 | 1.3 | 2026-11-19 | P0 cerrado: `SET_HW_RENDER` validado (solo OpenGL de escritorio), fallback software sin `context_reset` forzado, `context_destroy` al cerrar, doble free de SDL3 corregido, core simulado + `host_tests` en CTest y CI con `ctest` y caché de dependencias. Linux verificado en build + tests headless. |
 | 1.4 | 2026-11-19 | Cierre del P0: `context_destroy` antes de `retro_unload_game()` al cerrar juego (con test de orden), validación de `retro_api_version()`, `ShouldQuit()` consumida, `Ctrl+Q` como atajo sin pulsar `L`, `TextureId()` sin frame, carga única de core por CLI, `IsOptionAvailable()` eliminada, `LogCallback` seguro con `fmt` null, `.gitignore` cubre `build*/`. Tests: 85 comprobaciones, CI verde en tres plataformas. |
 | 1.5 | 2026-11-20 | Se cierra el árbol pendiente de la revisión de la P0: `PixelConversion.cpp` enlazado en `AlmenEMU` y `almenemu_tests`, `video::TextureUV` calificado, `StubVideo::ReadPixels` con la firma de la interfaz, `FlipRowsToTopDown` devuelve `bool` y rechaza readbacks cortos, `test_video.cpp` registrado en CTest como `video_tests` con `test_common.h`. Tests: 112 (`host_tests`) + 54 (`video_tests`) = 166 comprobaciones sin GPU. |
+| 1.6 | 2026-11-20 | Q-06 cerrada: job `sanitize` en la CI (Linux, GCC) que configura Debug con `-fsanitize=address,undefined,alignment,vptr` y ejecuta `ctest` y el smoke test con `ASAN_OPTIONS`/`UBSAN_OPTIONS` en `halt_on_error`. El core simulado lleva las mismas flags, así el runtime `libasan.so` resuelve también desde el módulo cargado con `dlopen()`. Verificado en local: 2/2 tests y `--help` sin reportes. |

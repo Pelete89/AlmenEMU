@@ -9,7 +9,8 @@ gestión de biblioteca, opciones del core, audio, mandos y savestates.
 > macOS seguirá usando software hasta M3 (Vulkan + MoltenVK).
 >
 > El host libretro tiene **tests de integración headless** (`ctest`) con un core simulado:
-> no necesitan GPU, ventana ni ROM.
+> no necesitan GPU, ventana ni ROM. En la CI de Linux también se ejecutan bajo **ASan + UBSan**
+> (job `sanitize`).
 >
 > Plan completo, backlog y criterios de release: [`docs/PLAN.md`](docs/PLAN.md).
 
@@ -98,6 +99,21 @@ tests de vídeo verifican la expansión de 5 y 6 bits, el pitch acolchado, el re
 con un FBO *grow-only* y que un readback más corto que el frame se rechaza. En total, 166
 comprobaciones. Se pueden desactivar con `-DALMENEMU_BUILD_TESTS=OFF`.
 
+Los mismos tests corren en la CI de Linux bajo ASan + UBSan (job `sanitize`), donde el core
+simulado se compila con las mismas flags para que el runtime compartido reporte también desde
+el core cargado con `dlopen()`. Para repetirlos en local:
+
+```bash
+cmake -S . -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DALMENEMU_BUILD_TESTS=ON \
+  -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -g" \
+  -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined,alignment,vptr -fno-omit-frame-pointer -g" \
+  -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" \
+  -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=address,undefined"
+ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 \
+  UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
+  ctest --test-dir build-asan --output-on-failure
+```
+
 ## Instalar el core Azahar
 
 Opción rápida:
@@ -181,6 +197,7 @@ docs/                    capturas y documentación
 - [x] Render hardware OpenGL 4.3 en Windows/Linux (verificado en Windows y en Linux
   headless; falta validar Azahar real en Linux).
 - [x] Tests headless del host con core simulado y CI que ejecuta `ctest`.
+- [x] Job de sanitizadores (ASan + UBSan) en la CI de Linux.
 - [ ] Render Vulkan 1.1 + MoltenVK en macOS.
 - [ ] Touchscreen y C-Stick completos.
 - [ ] Configuración por juego y perfiles de mandos.

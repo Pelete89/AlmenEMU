@@ -112,3 +112,77 @@ jobs:
           name: ${{ matrix.artifact_name }}
           path: ${{ matrix.artifact }}
           if-no-files-found: error
+
+  # ASan + UBSan over the headless tests, so a memory bug is caught by CI and not by hand.
+  # The tests are the part that exercises pointer-heavy libretro code (load/unload, options,
+  # savestates, hardware negotiation) through a core loaded with dlopen(), so the core is
+  # built with the same flags: GCC links the shared libasan runtime, which both binaries
+  # resolve, and the loaded core can report through it.
+  sanitize:
+    name: Sanitizers (Linux, ASan + UBSan)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config \
+            libasound2-dev libpulse-dev libudev-dev libdbus-1-dev \
+            libx11-dev libxext-dev libxinerama-dev libxrandr-dev libxi-dev \
+            libxcursor-dev libxfixes-dev libxss-dev libxtst-dev \
+            libwayland-dev wayland-protocols libdecor-0-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev \
+            libgl1-mesa-dev libglx-dev libegl1-mesa-dev libgles2-mesa-dev \
+            libvulkan-dev
+
+      - name: Restore dependency cache
+        uses: actions/cache@v4
+        with:
+          path: deps
+          key: ${{ runner.os }}-deps-v1-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Populate dependencies
+        shell: bash
+        run: |
+          mkdir -p deps
+          if [ ! -f deps/sdl3/.populated ]; then
+            git clone --depth 1 --branch release-3.4.20 \
+              https://github.com/libsdl-org/SDL.git deps/sdl3
+            touch deps/sdl3/.populated
+          fi
+          if [ ! -f deps/imgui/.populated ]; then
+            git clone --depth 1 --branch v1.93.0 \
+              https://github.com/ocornut/imgui.git deps/imgui
+            touch deps/imgui/.populated
+          fi
+
+      - name: Configure with sanitizers
+        run: >
+          cmake --preset linux -DALMENEMU_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Debug
+          -DFETCHCONTENT_SOURCE_DIR_SDL3=${{ github.workspace }}/deps/sdl3
+          -DFETCHCONTENT_SOURCE_DIR_IMGUI=${{ github.workspace }}/deps/imgui
+          "-DCMAKE_C_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer -g"
+          "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined,alignment,vptr -fno-omit-frame-pointer -g"
+          "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
+          "-DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=address,undefined"
+
+      - name: Build
+        run: cmake --build --preset linux --parallel
+
+      - name: Test under ASan + UBSan
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Smoke test under ASan
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        shell: bash
+        run: ./build/AlmenEMU --help

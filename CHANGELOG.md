@@ -13,6 +13,9 @@ y el versionado usa [Semantic Versioning](https://semver.org/lang/es/).
 - La CI ejecuta `ctest` en Linux, Windows y macOS además del build y el smoke test.
 - La CI cachea SDL3 e ImGui con `actions/cache` (clonados en `deps/`) y cancela runs
   obsoletos mediante `concurrency`.
+- Job de sanitizadores en la CI (`sanitize`): ASan + UBSan en Linux sobre `ctest` y el smoke
+  test. El core simulado se compila con las mismas flags, así el runtime compartido
+  (`libasan.so`) también informa desde el core cargado con `dlopen()`.
 - Opción CMake `ALMENEMU_BUILD_TESTS` (ON por defecto).
 - Plan de implementación completo en `docs/PLAN.md`.
 - Backlog priorizado, hitos, criterios de release y checklist GPL.
